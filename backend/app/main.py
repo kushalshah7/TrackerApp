@@ -2,20 +2,26 @@ import os
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from .config import MODULES, WORKBOOK_PATH
 from .excel_service import ExcelService, WorkbookUnavailable
 from .models import EntryPayload, StatusPayload
 
 app = FastAPI(title="Presales Weekly Tracker API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=[os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")], allow_credentials=True, allow_methods=["GET", "POST", "PATCH"], allow_headers=["*"])
-service = ExcelService()
+if os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL"):
+    from .postgres_service import PostgresService
+
+    service = PostgresService()
+else:
+    service = ExcelService()
 
 @app.exception_handler(WorkbookUnavailable)
 async def workbook_missing(_, exc): return __import__("fastapi").responses.JSONResponse(status_code=503, content={"detail": str(exc)})
 
 @app.get("/api/health")
-def health(): return {"status": "ok", "workbook_ready": WORKBOOK_PATH.exists()}
+def health():
+    return {"status": "ok", "workbook_ready": True if hasattr(service, "workbook_bytes") else WORKBOOK_PATH.exists()}
 
 @app.get("/api/users")
 def users(): return service.users()
@@ -57,5 +63,13 @@ def guide(): return service.raw_sheet("Column Guide")
 
 @app.get("/api/workbook/download")
 def download():
-    service._ensure(); stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    if hasattr(service, "workbook_bytes"):
+        return Response(
+            service.workbook_bytes(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="Presales_Weekly_Tracker_{stamp}.xlsx"'},
+        )
+    service._ensure()
     return FileResponse(WORKBOOK_PATH, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=f"Presales_Weekly_Tracker_{stamp}.xlsx")
+

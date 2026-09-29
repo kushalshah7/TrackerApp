@@ -25,10 +25,28 @@ def test_canonical_full_names_removes_short_and_case_variants():
         "Mohit Kapoor",
         "Mohit kapoor",
         "Ashritha",
+        "Hrishi Sir",
+        "Hrishikesh Phadnis",
+        "Jai",
+        "Jaidrath Maniyar",
+        "Krathika",
+        "Kratika",
+        "Kratika/Ashritha",
+        "Merlyn Methew",
+        "Moihit Kapoor",
+        "Navneet",
+        "Navaneet",
+        "NA",
+        "Team",
     ]
 
     assert canonical_full_names(names) == [
         "Ashritha",
         "Darshana Patil",
+        "Hrishikesh Phadnis",
+        "Jaidrath Maniyar",
+        "Kratika",
+        "Merlyn Mathew",
         "Mohit Kapoor",
+        "Navaneet",
     ]

@@ -25,6 +25,17 @@ PRESALES_NAMES = (
     "Suraj Raskar",
     "Surender Kumar",
 )
+ACCOUNT_MANAGER_ALIASES = {
+    "hrishi sir": "Hrishikesh Phadnis",
+    "hrishikesh sir": "Hrishikesh Phadnis",
+    "jai": "Jaidrath Maniyar",
+    "krathika": "Kratika",
+    "merlyn methew": "Merlyn Mathew",
+    "mohit kapoor": "Mohit Kapoor",
+    "moihit kapoor": "Mohit Kapoor",
+    "navneet": "Navaneet",
+}
+EXCLUDED_ACCOUNT_MANAGER_NAMES = {"na", "team"}
 
 
 def json_value(value: Any) -> Any:
@@ -38,8 +49,10 @@ def canonical_full_names(values: list[str]) -> list[str]:
     counts: dict[str, tuple[str, int]] = {}
     for value in values:
         name = value.strip()
-        if not name:
+        if (not name or name.casefold() in EXCLUDED_ACCOUNT_MANAGER_NAMES
+                or not name.replace(" ", "").isalpha()):
             continue
+        name = ACCOUNT_MANAGER_ALIASES.get(name.casefold(), name)
         key = name.casefold()
         display, count = counts.get(key, (name, 0))
         counts[key] = (display, count + 1)

@@ -15,12 +15,49 @@ from .config import MODULES, validate_entry_data
 
 SHEETS = {"weekly-review": ("Presales Review",), "weekly-meeting": ("Presales", "ISP Team")}
 MEETING_HEADERS = MODULES["weekly-meeting"]["fields"]
+PRESALES_NAMES = (
+    "Aditya Potdar",
+    "Ankesh Singh",
+    "Arun M",
+    "Ayush Rajput",
+    "Irshad",
+    "Kalim Ansari",
+    "Suraj Raskar",
+    "Surender Kumar",
+)
 
 
 def json_value(value: Any) -> Any:
     if isinstance(value, (date, datetime)):
         return value.date().isoformat() if isinstance(value, datetime) else value.isoformat()
     return value
+
+
+def canonical_full_names(values: list[str]) -> list[str]:
+    """Collapse case and short/full-name variants, preferring the common full name."""
+    counts: dict[str, tuple[str, int]] = {}
+    for value in values:
+        name = value.strip()
+        if not name:
+            continue
+        key = name.casefold()
+        display, count = counts.get(key, (name, 0))
+        counts[key] = (display, count + 1)
+
+    by_first_name: dict[str, list[tuple[str, int]]] = {}
+    for display, count in counts.values():
+        first_name = display.split()[0].casefold()
+        by_first_name.setdefault(first_name, []).append((display, count))
+
+    result = []
+    for variants in by_first_name.values():
+        full_names = [(name, count) for name, count in variants if len(name.split()) > 1]
+        if full_names:
+            # Frequency resolves spelling variants; length makes the fallback deterministic.
+            result.append(max(full_names, key=lambda item: (item[1], len(item[0])))[0])
+        else:
+            result.extend(name for name, _ in variants)
+    return sorted(result, key=str.casefold)
 
 
 class TrackerStore:
@@ -67,18 +104,19 @@ class TrackerStore:
     def names(self):
         with self.connect() as connection:
             rows = connection.execute(
-                "select distinct nullif(btrim(coalesce(data->>'AM', data->>'Client Manager')), '') as am, "
-                "nullif(btrim(data->>'Presales'), '') as presales from tracker_entries "
+                "select module, nullif(btrim(data->>'AM'), '') as am, "
+                "nullif(btrim(data->>'Client Manager'), '') as client_manager "
+                "from tracker_entries "
                 "where module in ('weekly-meeting', 'weekly-review')"
             ).fetchall()
-        am, presales = {}, {}
+        account_managers = []
         for row in rows:
-            for target, value in ((am, row["am"]), (presales, row["presales"])):
-                if isinstance(value, str) and value.strip():
-                    name = value.strip()
-                    target.setdefault(name.casefold(), name)
-        return {"am": sorted(am.values(), key=str.casefold),
-                "presales": sorted(presales.values(), key=str.casefold)}
+            field = "am" if row["module"] == "weekly-review" else "client_manager"
+            value = row[field]
+            if isinstance(value, str) and value.strip():
+                account_managers.append(value)
+        return {"am": canonical_full_names(account_managers),
+                "presales": list(PRESALES_NAMES)}
 
     def _clean(self, module: str, data: dict[str, Any]):
         validate_entry_data(module, data)

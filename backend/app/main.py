@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import Response
 
 from .config import MODULES
-from .models import EntryPayload
-from .tracker_store import TrackerStore
+from .auth.dependencies import AuthenticatedUser, current_user
+from .models import DeleteEntryPayload, EntryPayload, UpdateEntryPayload
+from .tracker_store import ConflictError, TrackerStore
 
 app = FastAPI(title="Presales Weekly Tracker API", version="2.1.0")
 store = TrackerStore()
@@ -25,46 +27,60 @@ def health():
 
 
 @app.get("/api/names")
-def names():
-    return store.names()
+def names(user: Annotated[AuthenticatedUser, Depends(current_user)]):
+    return store.names(user.presales)
+
+
+@app.get("/api/me")
+def me(user: Annotated[AuthenticatedUser, Depends(current_user)]):
+    return {"name": user.display_name, "email": user.email, "role": "admin" if user.is_admin else "presales",
+            "presales": user.presales}
 
 
 @app.get("/api/entries/{module}")
-def entries(module: str, limit: int = Query(5000, ge=1, le=5000)):
+def entries(module: str, user: Annotated[AuthenticatedUser, Depends(current_user)],
+            limit: int = Query(5000, ge=1, le=5000), before_id: int | None = Query(None, ge=1)):
     check_module(module)
-    return store.entries(module, limit)
+    return store.entries(module, limit, user.presales, before_id)
 
 
 @app.post("/api/entries/{module}", status_code=201)
-def add_entry(module: str, payload: EntryPayload):
+def add_entry(module: str, payload: EntryPayload,
+              user: Annotated[AuthenticatedUser, Depends(current_user)]):
     check_module(module)
     try:
-        return store.add(module, payload.data)
+        return store.add(module, payload.data, user.presales)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
 
 @app.patch("/api/entries/{module}/{record_id}")
-def update_entry(module: str, record_id: int, payload: EntryPayload):
+def update_entry(module: str, record_id: int, payload: UpdateEntryPayload,
+                 user: Annotated[AuthenticatedUser, Depends(current_user)]):
     check_module(module)
     try:
-        return store.update(module, record_id, payload.data)
+        return store.update(module, record_id, payload.data, payload.expected_last_edited_at, user.presales)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    except ConflictError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.delete("/api/entries/{module}/{record_id}")
-def delete_entry(module: str, record_id: int):
+def delete_entry(module: str, record_id: int, payload: DeleteEntryPayload,
+                 user: Annotated[AuthenticatedUser, Depends(current_user)]):
     check_module(module)
     try:
-        return store.delete(module, record_id)
+        return store.delete(module, record_id, payload.expected_last_edited_at, user.presales)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
+    except ConflictError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.get("/api/workbook/download")
-def download():
-    content = store.workbook_bytes()
+def download(user: Annotated[AuthenticatedUser, Depends(current_user)]):
+    content = store.workbook_bytes(user.presales)
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     return Response(
         content,

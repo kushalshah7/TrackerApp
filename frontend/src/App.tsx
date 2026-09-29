@@ -5,7 +5,6 @@ import {modules, months} from './config';
 import type {Field, Module} from './types';
 
 const currentMonth = months[new Date().getMonth()];
-const currentWeek = String(Math.min(4, Math.ceil(new Date().getDate() / 7)));
 const dateOnly = (value: unknown) => String(value ?? '').split(/[T ]/)[0];
 const displayDate = (value: unknown) => {
   const [year, month, day] = dateOnly(value).split('-');
@@ -54,8 +53,13 @@ function SheetTabs({active, onChange}: {active: string; onChange: (id: string) =
 
 function initialData(module: Module) {
   return Object.fromEntries(module.fields.map(field => [field.name,
-    field.name === 'Month' ? currentMonth : field.name === 'Week' ? currentWeek : '']));
+    field.name === 'Month' && module.id !== 'weekly-meeting' ? currentMonth : '']));
 }
+
+const meetingMonth = (value: unknown) => {
+  const month = Number(dateOnly(value).split('-')[1]);
+  return month >= 1 && month <= 12 ? months[month - 1] : '';
+};
 
 function NamePicker({field, value, names, onChange}: {field: Field; value: unknown; names: string[]; onChange: (value: string) => void}) {
   const selected = String(value ?? '');
@@ -67,26 +71,27 @@ function NamePicker({field, value, names, onChange}: {field: Field; value: unkno
     inputRef.current?.setCustomValidity(query !== selected ? 'Select a name from the list, or choose Enter if new name.' : field.required && !selected ? 'Select a name.' : '');
   }, [query, selected, field.required]);
   const matches = names.filter(name => name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const allowNewName = field.name !== 'Presales';
   const choose = (name: string) => {onChange(name); setQuery(name); setOpen(false);};
   return <div className="name-picker">
     <input ref={inputRef} role="combobox" aria-label={field.label || field.name} aria-expanded={open} aria-autocomplete="list"
-      value={query} required={field.required} placeholder="Search names; enter if new name"
+      value={query} required={field.required} placeholder={allowNewName ? 'Search names; enter if new name' : 'Choose a Presales team member'}
       onFocus={() => setOpen(true)} onBlur={() => {setTimeout(() => setOpen(false), 150); if (query !== selected) setQuery(selected);}}
       onChange={event => {setQuery(event.target.value); setOpen(true);}}/>
     {open && <div className="name-options" role="listbox">
       {matches.map(name => <button type="button" role="option" aria-selected={selected === name} key={name}
         onMouseDown={event => event.preventDefault()} onClick={() => choose(name)}>{name}</button>)}
-      {query.trim() && matches.length === 0 && <button type="button" className="new-name" role="option"
+      {allowNewName && query.trim() && matches.length === 0 && <button type="button" className="new-name" role="option"
         aria-selected={false} onMouseDown={event => event.preventDefault()} onClick={() => choose(query.trim())}>Enter if new name: {query.trim()}</button>}
     </div>}
   </div>;
 }
 
-function FieldControl({field, value, onChange, names}: {field: Field; value: unknown; onChange: (value: string) => void; names: {am: string[]; presales: string[]}}) {
+function FieldControl({field, value, onChange, names, locked = false}: {field: Field; value: unknown; onChange: (value: string) => void; names: {am: string[]; presales: string[]}; locked?: boolean}) {
   if (field.name === 'AM' || field.name === 'Client Manager' || field.name === 'Presales')
     return <NamePicker field={field} value={value} names={field.name === 'Presales' ? names.presales : names.am} onChange={onChange}/>;
   const common = {value: field.type === 'date' ? dateOnly(value) : field.type === 'month' ? dateOnly(value).slice(0, 7) : String(value ?? ''), required: field.required, onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => onChange(event.target.value)};
-  if (field.type === 'select') return <select {...common}><option value="">Select</option>{field.options?.map(option => <option key={option}>{option}</option>)}</select>;
+  if (field.type === 'select') return <select {...common} disabled={locked}><option value="">Select</option>{field.options?.map(option => <option key={option}>{option}</option>)}</select>;
   if (field.type === 'textarea') return <textarea {...common} rows={3} placeholder="Add details…"/>;
   return <input {...common} type={field.type || 'text'} min={field.type === 'number' ? 0 : undefined}/>;
 }
@@ -113,7 +118,7 @@ function EntryForm({module, notify, names, refreshNames}: {module: Module; notif
       <div className="form-grid">{module.fields.filter(field => (field.section || 'Details') === section).map(field =>
         <label key={field.name} className={field.type === 'textarea' ? 'wide' : ''}>
           <span>{field.label || field.name}{field.required && <b> *</b>}</span>
-          <FieldControl field={field} value={data[field.name]} names={names} onChange={value => {setData({...data, [field.name]: value}); setDirty(true);}}/>
+          <FieldControl field={field} value={data[field.name]} names={names} locked={module.id === 'weekly-meeting' && field.name === 'Month'} onChange={value => {setData({...data, [field.name]: value, ...(module.id === 'weekly-meeting' && field.name === 'Date' ? {Month: meetingMonth(value)} : {})}); setDirty(true);}}/>
         </label>)}</div>
     </section>)}
     <div className="save-bar"><span>{dirty ? 'Unsaved entry' : 'Ready for a new entry'}</span><button className="primary" disabled={busy}>{busy ? 'Saving…' : <><FilePlus2/> Add entry</>}</button></div>
@@ -121,18 +126,21 @@ function EntryForm({module, notify, names, refreshNames}: {module: Module; notif
 }
 
 function EditDialog({module, row, onClose, onSaved, notify, names}: {module: Module; row: any; onClose: () => void; onSaved: () => void; notify: (m: string, e?: boolean) => void; names: {am: string[]; presales: string[]}}) {
-  const [data, setData] = useState<Record<string, unknown>>(() => Object.fromEntries(module.fields.map(field => [field.name, row[field.name] ?? ''])));
+  const [data, setData] = useState<Record<string, unknown>>(() => ({
+    ...Object.fromEntries(module.fields.map(field => [field.name, row[field.name] ?? ''])),
+    ...(module.id === 'weekly-meeting' ? {Month: meetingMonth(row.Date)} : {}),
+  }));
   const [busy, setBusy] = useState(false);
   const save = async (event: React.FormEvent) => {
     event.preventDefault(); setBusy(true);
-    try { await api.update(module.id, row._row, data); notify('Entry updated'); onSaved(); }
+    try { await api.update(module.id, row._row, data, row._last_edited_at); notify('Entry updated'); onSaved(); }
     catch (error: any) { notify(error.message, true); setBusy(false); }
   };
   return <div className="dialog-backdrop" role="presentation" onMouseDown={event => event.target === event.currentTarget && onClose()}>
     <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="edit-title">
       <div className="dialog-head"><div><span className="eyebrow">RECORD {row._row}</span><h2 id="edit-title">Edit {module.label}</h2><small className="edited-date">{lastEdited(row._last_edited_at)}</small></div><button className="icon-button" onClick={onClose} aria-label="Close"><X/></button></div>
       <form onSubmit={save}><div className="form-grid compact">{module.fields.map(field => <label key={field.name} className={field.type === 'textarea' ? 'wide' : ''}>
-        <span>{field.label || field.name}{field.required && <b> *</b>}</span><FieldControl field={field} value={data[field.name]} names={names} onChange={value => setData({...data, [field.name]: value})}/>
+        <span>{field.label || field.name}{field.required && <b> *</b>}</span><FieldControl field={field} value={data[field.name]} names={names} locked={module.id === 'weekly-meeting' && field.name === 'Month'} onChange={value => setData({...data, [field.name]: value, ...(module.id === 'weekly-meeting' && field.name === 'Date' ? {Month: meetingMonth(value)} : {})})}/>
       </label>)}</div><div className="dialog-actions"><button type="button" className="secondary" onClick={onClose}>Cancel</button><button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button></div></form>
     </section>
   </div>;
@@ -142,13 +150,13 @@ function DeleteDialog({module, row, onClose, onDeleted, notify}: {module: Module
   const [busy, setBusy] = useState(false);
   const remove = async () => {
     setBusy(true);
-    try { await api.remove(module.id, row._row); notify('Entry deleted'); onDeleted(); }
+    try { await api.remove(module.id, row._row, row._last_edited_at); notify('Entry deleted'); onDeleted(); }
     catch (error: any) { notify(error.message, true); setBusy(false); }
   };
   return <div className="dialog-backdrop" role="presentation" onMouseDown={event => event.target === event.currentTarget && onClose()}>
     <section className="dialog confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-description">
       <div className="dialog-head"><div><span className="eyebrow danger-eyebrow">DELETE ENTRY</span><h2 id="delete-title">Delete this {module.label} entry?</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X/></button></div>
-      <p id="delete-description">This permanently removes the entry from the tracker and from future Excel downloads. This action cannot be undone.</p>
+      <p id="delete-description">This removes the entry from the tracker and future Excel downloads. An administrator can restore it if needed.</p>
       <div className="dialog-actions"><button type="button" className="secondary" onClick={onClose} disabled={busy}>Keep entry</button><button type="button" className="danger-button" onClick={remove} disabled={busy}>{busy ? 'Deleting…' : <><Trash2/> Delete entry</>}</button></div>
     </section>
   </div>;
@@ -165,7 +173,7 @@ function DataPage({module, notify, names, refreshNames}: {module: Module; notify
     refreshNames();
     const request = ++loadRequest.current;
     setLoading(true);
-    api.entries(module.id, 5000)
+    api.allEntries(module.id)
       .then(result => {if (request === loadRequest.current) setRows(result);})
       .catch((error: Error) => {if (request === loadRequest.current) notify(error.message, true);})
       .finally(() => {if (request === loadRequest.current) setLoading(false);});
@@ -181,7 +189,7 @@ function DataPage({module, notify, names, refreshNames}: {module: Module; notify
   }), [rows, filters, module]);
   const valuesFor = (field: Field) => [...new Set(rows.map(row => displayValue(field, row[field.name]) || '(Blanks)'))].sort((a, b) => a.localeCompare(b));
   return <section className="data-card">
-    <div className="data-toolbar"><div><h2>{module.label} data</h2><p><strong>{filtered.length}</strong> of {rows.length} records shown <span className="desktop-hint">· filter from any column header</span></p></div>{Object.values(filters).some(Boolean) && <button className="secondary" onClick={() => setFilters({})}>Clear filters</button>}</div>
+    <div className="data-toolbar"><div><h2>{module.label} data</h2><p><strong>{filtered.length}</strong> of {rows.length} records shown <span className="desktop-hint">· filter from any column header</span></p></div><button className="secondary" onClick={load}>Refresh data</button>{Object.values(filters).some(Boolean) && <button className="secondary" onClick={() => setFilters({})}>Clear filters</button>}</div>
     <details className="mobile-filters"><summary><span className="filter-summary-label"><ListFilter/> Filter columns</span><span className="filter-count">{Object.keys(filters).filter(key => key !== '_all' && filters[key]).length || ''}</span></summary><div className="mobile-filter-grid">
       {module.fields.map(field => <label key={field.name}><span>{field.label || field.name}{field.required && <b> *</b>}</span><select value={filters[field.name] || ''} onChange={e => setFilters({...filters, [field.name]: e.target.value})}><option value="">All</option>{valuesFor(field).map(value => <option key={value} value={value === '(Blanks)' ? '__BLANKS__' : value}>{value}</option>)}</select></label>)}
       <button className="secondary" onClick={() => setFilters({})}>Clear all filters</button>
@@ -192,7 +200,7 @@ function DataPage({module, notify, names, refreshNames}: {module: Module; notify
   </section>;
 }
 
-export default function App() {
+export default function App({viewer, onSignOut}: {viewer: {name: string; email: string; role: 'admin' | 'presales'; presales: string | null}; onSignOut: () => void}) {
   const [view, setView] = useState<'entry' | 'data'>('entry');
   const [sheet, setSheet] = useState(modules[0].id);
   const [theme, setTheme] = useState(() => localStorage.getItem('tracker-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
@@ -206,7 +214,7 @@ export default function App() {
   return <div className="app-shell"><a className="skip" href="#main">Skip to main content</a>
     <header className="topbar"><div className="brand"><div className="brand-mark">P</div><div><b>Presales Tracker</b><span>Shared team workbook</span></div></div>
       <nav className="view-switch" aria-label="Primary navigation"><button className={view === 'entry' ? 'active' : ''} onClick={() => setView('entry')}><FilePlus2/> Add entries</button><button className={view === 'data' ? 'active' : ''} onClick={() => setView('data')}><Table2/> View & edit data</button></nav>
-      <div className="top-actions"><ThemeToggle theme={theme} onToggle={() => setTheme(theme === 'dark' ? 'light' : 'dark')}/><button className="download" onClick={() => api.download().catch((error: Error) => notify(error.message, true))}><Download/><span>Download Excel</span></button></div>
+      <div className="top-actions"><span className="viewer-name">{viewer.name}</span><ThemeToggle theme={theme} onToggle={() => setTheme(theme === 'dark' ? 'light' : 'dark')}/><button className="download" onClick={() => api.download().catch((error: Error) => notify(error.message, true))}><Download/><span>Download Excel</span></button><button className="secondary" onClick={onSignOut}>Sign out</button></div>
     </header>
     <main id="main"><div className="page-head"><div><span className="eyebrow">{view === 'entry' ? 'TEAM ENTRY' : 'WORKBOOK DATA'}</span><h1>{view === 'entry' ? 'Add weekly details' : 'Review and update entries'}</h1><p>{view === 'entry' ? 'Choose a sheet and submit details for any team member.' : 'Filter every column and correct existing workbook records.'}</p></div></div>
       <SheetTabs active={sheet} onChange={setSheet}/>

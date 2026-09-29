@@ -1,0 +1,12 @@
+.git
+.tmp
+.release
+.venv
+.env*
+.pytest_cache
+**/__pycache__
+**/*.pyc
+frontend/node_modules
+frontend/dist
+backend/data
+*.pdf

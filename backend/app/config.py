@@ -23,7 +23,7 @@ MODULES["weekly-meeting"]["sheet"] = "Presales"
 
 REQUIRED_FIELDS = {
     "weekly-review": {"Region", "Presales", "Customer", "Opportunity Details"},
-    "weekly-meeting": {"Region", "Date", "Presales", "Account Name", "Meeting Agenda"},
+    "weekly-meeting": {"Region", "Week", "Date", "Presales", "Account Name", "Meeting Agenda"},
     "training-attended": {"Region", "Date", "PreSales Name", "Training Name"},
     "training-conducted": {"Region", "Date", "PreSales Name", "Training Name"},
     "poc": {"Region", "Date", "Presales", "Customer", "PoC Details"},

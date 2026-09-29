@@ -1,7 +1,12 @@
+import {apiAccessToken} from './auth';
+
 const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
 
 const request = async(path: string, init?: RequestInit) => {
-  const response = await fetch(`${baseUrl}/api${path}`, init);
+  const token = await apiAccessToken();
+  const headers = new Headers(init?.headers);
+  headers.set('Authorization', `Bearer ${token}`);
+  const response = await fetch(`${baseUrl}/api${path}`, {...init, headers});
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.detail || 'Something went wrong');
   return body;
@@ -9,13 +14,24 @@ const request = async(path: string, init?: RequestInit) => {
 
 export const api = {
   health: () => request('/health'),
+  me: (): Promise<{name: string; email: string; role: 'admin' | 'presales'; presales: string | null}> => request('/me'),
   names: (): Promise<{am: string[]; presales: string[]}> => request('/names'),
-  entries: (module: string, limit = 100) => request(`/entries/${module}?limit=${limit}`),
+  entries: (module: string, limit = 5000, beforeId?: number): Promise<any[]> => request(`/entries/${module}?limit=${limit}${beforeId ? `&before_id=${beforeId}` : ''}`),
+  allEntries: async (module: string): Promise<any[]> => {
+    const rows: any[] = [];
+    while (true) {
+      const beforeId = rows.length ? rows[rows.length - 1]._row : undefined;
+      const batch = await request(`/entries/${module}?limit=5000${beforeId ? `&before_id=${beforeId}` : ''}`) as any[];
+      rows.push(...batch);
+      if (batch.length < 5000) return rows;
+    }
+  },
   add: (module: string, data: Record<string, unknown>) => request(`/entries/${module}`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({data})}),
-  update: (module: string, recordId: string, data: Record<string, unknown>) => request(`/entries/${module}/${encodeURIComponent(recordId)}`, {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({data})}),
-  remove: (module: string, recordId: string) => request(`/entries/${module}/${encodeURIComponent(recordId)}`, {method: 'DELETE'}),
+  update: (module: string, recordId: string, data: Record<string, unknown>, expectedLastEditedAt: string | null) => request(`/entries/${module}/${encodeURIComponent(recordId)}`, {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({data, expected_last_edited_at: expectedLastEditedAt})}),
+  remove: (module: string, recordId: string, expectedLastEditedAt: string | null) => request(`/entries/${module}/${encodeURIComponent(recordId)}`, {method: 'DELETE', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({expected_last_edited_at: expectedLastEditedAt})}),
   download: async () => {
-    const response = await fetch(`${baseUrl}/api/workbook/download`);
+    const token = await apiAccessToken();
+    const response = await fetch(`${baseUrl}/api/workbook/download`, {headers: {Authorization: `Bearer ${token}`}});
     if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || 'Download failed');
     const blob = await response.blob();
     const url = URL.createObjectURL(blob);
@@ -23,6 +39,6 @@ export const api = {
     anchor.href = url;
     anchor.download = 'Presales_Weekly_Tracker.xlsx';
     anchor.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
 };

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from io import BytesIO
 from typing import Any
 
@@ -20,9 +20,9 @@ PRESALES_NAMES = (
     "Aditya Potdar",
     "Ankesh Singh",
     "Arun M",
-    "Ayush Rajput",
     "Irshad",
     "Kalim Ansari",
+    "Pawan Dubey",
     "Suraj Raskar",
     "Surender Kumar",
 )
@@ -34,9 +34,14 @@ ACCOUNT_MANAGER_ALIASES = {
     "merlyn methew": "Merlyn Mathew",
     "mohit kapoor": "Mohit Kapoor",
     "moihit kapoor": "Mohit Kapoor",
+    "noaman vohra": "Noaman Vohara",
     "navneet": "Navaneet",
 }
 EXCLUDED_ACCOUNT_MANAGER_NAMES = {"na", "team"}
+
+
+class ConflictError(Exception):
+    pass
 
 
 def json_value(value: Any) -> Any:
@@ -67,8 +72,8 @@ def excel_month_year(value: Any) -> Any:
 
 
 def canonical_full_names(values: list[str]) -> list[str]:
-    """Collapse case and short/full-name variants, preferring the common full name."""
-    counts: dict[str, tuple[str, int]] = {}
+    """Collapse known aliases and unambiguous short/full-name variants."""
+    variants: dict[str, dict[str, int]] = {}
     for value in values:
         name = value.strip()
         if (not name or name.casefold() in EXCLUDED_ACCOUNT_MANAGER_NAMES
@@ -76,22 +81,22 @@ def canonical_full_names(values: list[str]) -> list[str]:
             continue
         name = ACCOUNT_MANAGER_ALIASES.get(name.casefold(), name)
         key = name.casefold()
-        display, count = counts.get(key, (name, 0))
-        counts[key] = (display, count + 1)
+        spellings = variants.setdefault(key, {})
+        spellings[name] = spellings.get(name, 0) + 1
 
-    by_first_name: dict[str, list[tuple[str, int]]] = {}
-    for display, count in counts.values():
+    by_first_name: dict[str, list[str]] = {}
+    for spellings in variants.values():
+        display = max(spellings, key=lambda name: (spellings[name], sum(char.isupper() for char in name)))
         first_name = display.split()[0].casefold()
-        by_first_name.setdefault(first_name, []).append((display, count))
+        by_first_name.setdefault(first_name, []).append(display)
 
     result = []
-    for variants in by_first_name.values():
-        full_names = [(name, count) for name, count in variants if len(name.split()) > 1]
+    for names in by_first_name.values():
+        full_names = [name for name in names if len(name.split()) > 1]
         if full_names:
-            # Frequency resolves spelling variants; length makes the fallback deterministic.
-            result.append(max(full_names, key=lambda item: (item[1], len(item[0])))[0])
+            result.extend(full_names)
         else:
-            result.extend(name for name, _ in variants)
+            result.extend(names)
     return sorted(result, key=str.casefold)
 
 
@@ -126,24 +131,38 @@ class TrackerStore:
                 alter table tracker_workbook_template enable row level security;
             """)
 
-    def entries(self, module: str, limit: int = 5000):
+    def entries(self, module: str, limit: int | None = 5000, presales: str | None = None,
+                before_id: int | None = None):
+        query = ("select id, data, last_edited_at from tracker_entries "
+                 "where module = %s and data->>'_deleted_at' is null")
+        params: tuple[Any, ...] = (module,)
+        if presales is not None:
+            query += " and lower(data->>'Presales') = lower(%s)"
+            params += (presales,)
+        if before_id is not None:
+            query += " and id < %s"
+            params += (before_id,)
+        query += " order by id desc"
+        if limit is not None:
+            query += " limit %s"
+            params += (limit,)
         with self.connect() as connection:
-            rows = connection.execute(
-                "select id, data, last_edited_at from tracker_entries where module = %s order by id desc limit %s",
-                (module, limit),
-            ).fetchall()
+            rows = connection.execute(query, params).fetchall()
         return [{**row["data"], "_row": row["id"],
                  "_last_edited_at": row["last_edited_at"].isoformat() if row["last_edited_at"] else None}
                 for row in rows]
 
-    def names(self):
+    def names(self, presales: str | None = None):
+        query = ("select module, nullif(btrim(data->>'AM'), '') as am, "
+                 "nullif(btrim(data->>'Client Manager'), '') as client_manager "
+                 "from tracker_entries "
+                 "where module in ('weekly-meeting', 'weekly-review') and data->>'_deleted_at' is null")
+        params: tuple[Any, ...] = ()
+        if presales is not None:
+            query += " and lower(data->>'Presales') = lower(%s)"
+            params = (presales,)
         with self.connect() as connection:
-            rows = connection.execute(
-                "select module, nullif(btrim(data->>'AM'), '') as am, "
-                "nullif(btrim(data->>'Client Manager'), '') as client_manager "
-                "from tracker_entries "
-                "where module in ('weekly-meeting', 'weekly-review')"
-            ).fetchall()
+            rows = connection.execute(query, params).fetchall()
         account_managers = []
         for row in rows:
             field = "am" if row["module"] == "weekly-review" else "client_manager"
@@ -151,18 +170,49 @@ class TrackerStore:
             if isinstance(value, str) and value.strip():
                 account_managers.append(value)
         return {"am": canonical_full_names(account_managers),
-                "presales": list(PRESALES_NAMES)}
+                "presales": [presales] if presales else list(PRESALES_NAMES)}
 
     def _clean(self, module: str, data: dict[str, Any]):
         validate_entry_data(module, data)
         unknown = set(data) - set(MODULES[module]["fields"])
         if unknown:
             raise ValueError(f"Unsupported fields: {', '.join(sorted(unknown))}")
-        return {key: normalize_month_year(value) if key in MONTH_YEAR_FIELDS else json_value(value)
-                for key, value in data.items()}
+        clean = {key: normalize_month_year(value) if key in MONTH_YEAR_FIELDS else json_value(value)
+                 for key, value in data.items()}
+        if module == "weekly-meeting" and clean.get("Date"):
+            clean["Month"] = date.fromisoformat(str(clean["Date"])[:10]).strftime("%B")
+        for field in ("AM", "Client Manager"):
+            value = clean.get(field)
+            if not value:
+                continue
+            name = str(value).strip()
+            if (name.casefold() in EXCLUDED_ACCOUNT_MANAGER_NAMES
+                    or not name.replace(" ", "").isalpha()):
+                raise ValueError(f"{field} must contain one person's name using letters and spaces")
+            clean[field] = ACCOUNT_MANAGER_ALIASES.get(name.casefold(), name)
+        return clean
 
-    def add(self, module: str, data: dict[str, Any]):
+    @staticmethod
+    def _check_presales(data: dict[str, Any], previous: dict[str, Any] | None = None):
+        name = data.get("Presales")
+        if not name:
+            return
+        canonical = next((item for item in PRESALES_NAMES if item.casefold() == str(name).casefold()), None)
+        if canonical:
+            data["Presales"] = canonical
+        elif previous is None or name != previous.get("Presales"):
+            raise ValueError("Presales must be one of the eight team names")
+
+    @staticmethod
+    def _check_version(current: datetime | None, expected: datetime | None):
+        if current != expected:
+            raise ConflictError("This record changed since you opened it. Refresh the data and try again.")
+
+    def add(self, module: str, data: dict[str, Any], allowed_presales: str | None = None):
         clean = self._clean(module, data)
+        self._check_presales(clean)
+        if allowed_presales is not None and clean.get("Presales") != allowed_presales:
+            raise ValueError("You can only add entries under your Presales name")
         with self.connect() as connection:
             connection.execute("select pg_advisory_xact_lock(hashtext(%s))", (module,))
             serial = MODULES[module]["serial"]
@@ -179,15 +229,23 @@ class TrackerStore:
             ).fetchone()
         return {"row": row["id"], "message": "Entry added successfully"}
 
-    def update(self, module: str, record_id: int, data: dict[str, Any]):
+    def update(self, module: str, record_id: int, data: dict[str, Any], expected_last_edited_at: datetime | None,
+               allowed_presales: str | None = None):
         clean = self._clean(module, data)
         with self.connect() as connection:
             old = connection.execute(
-                "select data from tracker_entries where id = %s and module = %s for update",
+                "select data, last_edited_at from tracker_entries "
+                "where id = %s and module = %s and data->>'_deleted_at' is null for update",
                 (record_id, module),
             ).fetchone()
             if not old:
                 raise ValueError("Entry was not found")
+            if allowed_presales is not None and old["data"].get("Presales") != allowed_presales:
+                raise ValueError("Entry was not found")
+            self._check_version(old["last_edited_at"], expected_last_edited_at)
+            self._check_presales(clean, old["data"])
+            if allowed_presales is not None and clean.get("Presales") != allowed_presales:
+                raise ValueError("You cannot change the Presales owner")
             for key in ("_source_row", "_source_sheet", MODULES[module]["serial"]):
                 if key and key in old["data"]:
                     clean[key] = old["data"][key]
@@ -197,17 +255,48 @@ class TrackerStore:
             )
         return {"row": record_id, "message": "Entry updated successfully"}
 
-    def delete(self, module: str, record_id: int):
+    def delete(self, module: str, record_id: int, expected_last_edited_at: datetime | None,
+               allowed_presales: str | None = None):
         with self.connect() as connection:
-            row = connection.execute(
-                "delete from tracker_entries where module = %s and id = %s returning id",
+            current = connection.execute(
+                "select data, last_edited_at from tracker_entries "
+                "where module = %s and id = %s and data->>'_deleted_at' is null for update",
                 (module, record_id),
             ).fetchone()
-            if not row:
+            if not current:
                 raise ValueError("Entry was not found")
+            if allowed_presales is not None and current["data"].get("Presales") != allowed_presales:
+                raise ValueError("Entry was not found")
+            self._check_version(current["last_edited_at"], expected_last_edited_at)
+            connection.execute(
+                "update tracker_entries set data = jsonb_set(data, '{_deleted_at}', to_jsonb(now()::text)), "
+                "updated_at = now(), last_edited_at = now() where module = %s and id = %s",
+                (module, record_id),
+            )
         return {"row": record_id, "message": "Entry deleted successfully"}
 
-    def workbook_bytes(self):
+    def workbook_bytes(self, presales: str | None = None):
+        if presales is not None:
+            workbook = openpyxl.Workbook()
+            workbook.remove(workbook.active)
+            for module in SHEETS:
+                sheet = workbook.create_sheet(MODULES[module]["sheet"])
+                fields = MODULES[module]["fields"]
+                sheet.append(fields)
+                for record in reversed(self.entries(module, limit=None, presales=presales)):
+                    values = [excel_month_year(record.get(field)) if field in MONTH_YEAR_FIELDS
+                              else record.get(field) for field in fields]
+                    sheet.append(values)
+                    for col, field in enumerate(fields, 1):
+                        cell = sheet.cell(sheet.max_row, col)
+                        if field in MONTH_YEAR_FIELDS:
+                            cell.number_format = "mmm-yy"
+                        elif isinstance(cell.value, str) and cell.value.startswith("="):
+                            cell.data_type = "s"
+            output = BytesIO()
+            workbook.save(output)
+            workbook.close()
+            return output.getvalue()
         with self.connect() as connection:
             template = connection.execute(
                 "select content from tracker_workbook_template where singleton = true"
@@ -216,7 +305,7 @@ class TrackerStore:
             raise ValueError("Workbook has not been imported")
         workbook = openpyxl.load_workbook(BytesIO(bytes(template["content"])))
         for module, names in SHEETS.items():
-            records = list(reversed(self.entries(module)))
+            records = list(reversed(self.entries(module, limit=None)))
             for sheet_name in names:
                 sheet = workbook[sheet_name]
                 fields = MODULES[module]["fields"]
@@ -245,6 +334,8 @@ class TrackerStore:
                             except ValueError:
                                 pass
                         cell.value = value
+                        if isinstance(value, str) and value.startswith("="):
+                            cell.data_type = "s"
         output = BytesIO()
         workbook.save(output)
         workbook.close()

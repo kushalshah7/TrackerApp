@@ -15,6 +15,7 @@ from .config import MODULES, validate_entry_data
 
 SHEETS = {"weekly-review": ("Presales Review",), "weekly-meeting": ("Presales", "ISP Team")}
 MEETING_HEADERS = MODULES["weekly-meeting"]["fields"]
+MONTH_YEAR_FIELDS = {"Date of Opportunity (MM/YY)", "Expected Month"}
 PRESALES_NAMES = (
     "Aditya Potdar",
     "Ankesh Singh",
@@ -42,6 +43,27 @@ def json_value(value: Any) -> Any:
     if isinstance(value, (date, datetime)):
         return value.date().isoformat() if isinstance(value, datetime) else value.isoformat()
     return value
+
+
+def normalize_month_year(value: Any) -> Any:
+    if value in (None, ""):
+        return value
+    if isinstance(value, (date, datetime)):
+        return value.strftime("%Y-%m")
+    text = str(value).strip()
+    for pattern in ("%Y-%m", "%Y-%m-%d", "%b-%y", "%B %Y"):
+        try:
+            return datetime.strptime(text, pattern).strftime("%Y-%m")
+        except ValueError:
+            continue
+    raise ValueError("Month and year must use the YYYY-MM format")
+
+
+def excel_month_year(value: Any) -> Any:
+    normalized = normalize_month_year(value)
+    if normalized in (None, ""):
+        return normalized
+    return datetime.strptime(normalized, "%Y-%m").date()
 
 
 def canonical_full_names(values: list[str]) -> list[str]:
@@ -136,7 +158,8 @@ class TrackerStore:
         unknown = set(data) - set(MODULES[module]["fields"])
         if unknown:
             raise ValueError(f"Unsupported fields: {', '.join(sorted(unknown))}")
-        return {key: json_value(value) for key, value in data.items()}
+        return {key: normalize_month_year(value) if key in MONTH_YEAR_FIELDS else json_value(value)
+                for key, value in data.items()}
 
     def add(self, module: str, data: dict[str, Any]):
         clean = self._clean(module, data)
@@ -212,12 +235,16 @@ class TrackerStore:
                         next_row += 1
                     for col, field in enumerate(fields, 1):
                         value = record.get(field)
-                        if field in {"Date", "Date of Opportunity (MM/YY)", "Expected Month"} and isinstance(value, str):
+                        cell = sheet.cell(target, col)
+                        if field in MONTH_YEAR_FIELDS:
+                            value = excel_month_year(value)
+                            cell.number_format = "mmm-yy"
+                        elif field == "Date" and isinstance(value, str):
                             try:
                                 value = date.fromisoformat(value)
                             except ValueError:
                                 pass
-                        sheet.cell(target, col).value = value
+                        cell.value = value
         output = BytesIO()
         workbook.save(output)
         workbook.close()

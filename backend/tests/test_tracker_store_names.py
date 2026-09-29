@@ -1,4 +1,13 @@
-from app.tracker_store import PRESALES_NAMES, canonical_full_names
+from datetime import date
+
+import pytest
+
+from app.tracker_store import (
+    PRESALES_NAMES,
+    canonical_full_names,
+    excel_month_year,
+    normalize_month_year,
+)
 
 
 def test_presales_roster_contains_only_the_eight_active_names():
@@ -50,3 +59,20 @@ def test_canonical_full_names_removes_short_and_case_variants():
         "Mohit Kapoor",
         "Navaneet",
     ]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("2026-09", "2026-09"), ("2026-09-15", "2026-09"), ("Sep-26", "2026-09")],
+)
+def test_normalize_month_year(value, expected):
+    assert normalize_month_year(value) == expected
+
+
+def test_excel_month_year_is_a_real_excel_date():
+    assert excel_month_year("2026-09") == date(2026, 9, 1)
+
+
+def test_normalize_month_year_rejects_invalid_values():
+    with pytest.raises(ValueError, match="YYYY-MM"):
+        normalize_month_year("Septemberish")

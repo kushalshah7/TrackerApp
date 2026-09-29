@@ -11,12 +11,20 @@ const displayDate = (value: unknown) => {
   const [year, month, day] = dateOnly(value).split('-');
   return year && month && day ? `${day}/${month}/${year}` : String(value ?? '');
 };
+const displayMonth = (value: unknown) => {
+  const match = String(value ?? '').match(/^(\d{4})-(\d{2})/);
+  if (!match) return String(value ?? '');
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) return String(value ?? '');
+  return `${new Date(Date.UTC(Number(match[1]), month - 1)).toLocaleString('en-US', {month: 'short', timeZone: 'UTC'})}-${match[1].slice(2)}`;
+};
 const lastEdited = (value: unknown) => value
   ? `Last edited ${new Date(String(value)).toLocaleString('en-IN', {dateStyle: 'medium', timeStyle: 'short'})}`
   : 'Last edited date unavailable';
 const currencyFields = new Set(['Value (₹)', 'Deal Value']);
 const displayValue = (field: Field, value: unknown) => {
   if (field.type === 'date') return displayDate(value);
+  if (field.type === 'month') return displayMonth(value);
   if (value === null || value === undefined || value === '') return '';
   if (currencyFields.has(field.name)) {
     const amount = Number(value);

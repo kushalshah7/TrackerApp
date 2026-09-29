@@ -13,7 +13,7 @@ const allModules:Module[]=[
 const reviewFields = allModules.find(module => module.id === 'weekly-review')!.fields;
 reviewFields.find(field => field.name === 'Month')!.name = 'Expected Month';
 reviewFields.find(field => field.name === 'Expected Month')!.type = 'month';
-reviewFields.find(field => field.name === 'Date of Opportunity (MM/YY)')!.type = 'date';
+reviewFields.find(field => field.name === 'Date of Opportunity (MM/YY)')!.type = 'month';
 reviewFields.find(field => field.type === 'number')!.name = 'Value (₹)';
 export const modules = allModules.filter(module => module.id === 'weekly-meeting' || module.id === 'weekly-review');
 export const navExtra=[{id:'targets',label:'Client Manager Targets'},{id:'guide',label:'Column Guide'}];

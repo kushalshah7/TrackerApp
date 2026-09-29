@@ -1,46 +1,15 @@
-import {InteractionRequiredAuthError, PublicClientApplication} from '@azure/msal-browser';
+import {createAuthClient} from '@neondatabase/neon-js/auth';
+import {BetterAuthVanillaAdapter} from '@neondatabase/neon-js/auth/vanilla/adapters';
 
-const tenantId = import.meta.env.VITE_ENTRA_TENANT_ID;
-const clientId = import.meta.env.VITE_ENTRA_SPA_CLIENT_ID;
-export const apiScope = import.meta.env.VITE_API_SCOPE;
-export const authConfigured = Boolean(tenantId && clientId && apiScope);
-
-export const msal = new PublicClientApplication({
-  auth: {
-    clientId,
-    authority: `https://login.microsoftonline.com/${tenantId}`,
-    redirectUri: window.location.origin,
-  },
-  cache: {cacheLocation: 'sessionStorage'},
-});
-
-let initialization: Promise<void> | null = null;
-export function initializeAuth(): Promise<void> {
-  if (!authConfigured) return Promise.reject(new Error('Microsoft work-account sign-in is not configured.'));
-  initialization ??= msal.initialize().then(async () => {await msal.handleRedirectPromise();});
-  return initialization;
-}
-
-export async function signIn() {
-  await initializeAuth();
-  const result = await msal.loginPopup({scopes: [apiScope]});
-  msal.setActiveAccount(result.account);
-  return result.account;
-}
-
-export async function signOut() {
-  const account = msal.getActiveAccount() ?? msal.getAllAccounts()[0];
-  if (account) await msal.logoutPopup({account, mainWindowRedirectUri: window.location.origin});
-}
+const authUrl = import.meta.env.VITE_NEON_AUTH_URL;
+export const authConfigured = Boolean(authUrl && authUrl.startsWith('https://'));
+export const authClient = authConfigured
+  ? createAuthClient(authUrl, {adapter: BetterAuthVanillaAdapter({fetchOptions: {credentials: 'include'}})})
+  : null;
 
 export async function apiAccessToken(): Promise<string> {
-  await initializeAuth();
-  const account = msal.getActiveAccount() ?? msal.getAllAccounts()[0];
-  if (!account) throw new Error('Sign in with your Microsoft work account.');
-  try {
-    return (await msal.acquireTokenSilent({account, scopes: [apiScope]})).accessToken;
-  } catch (error) {
-    if (!(error instanceof InteractionRequiredAuthError)) throw error;
-    return (await msal.acquireTokenPopup({account, scopes: [apiScope]})).accessToken;
-  }
+  if (!authClient) throw new Error('Tracker sign-in is not configured.');
+  const {data, error} = await authClient.token();
+  if (error || !data?.token) throw new Error('Sign in to continue.');
+  return data.token;
 }

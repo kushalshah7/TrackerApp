@@ -34,6 +34,10 @@ class UpdateEntryPayload(EntryPayload):
 class DeleteEntryPayload(BaseModel):
     expected_last_edited_at: datetime | None
 
+
+class InvitePayload(BaseModel):
+    code: str = Field(min_length=20, max_length=128)
+
 class StatusPayload(BaseModel):
     status: Literal["Pending", "Completed"]
     up_to: str | None = Field(default=None, max_length=120)

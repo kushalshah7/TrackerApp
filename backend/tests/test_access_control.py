@@ -1,19 +1,21 @@
 import os
 import json
 import time
+import hashlib
 from io import BytesIO
 from types import SimpleNamespace
 
 import jwt
 import openpyxl
 import pytest
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("DATABASE_URL", "postgresql://unused")
 
-from app.auth.dependencies import AuthSettings, AuthenticatedUser, TokenValidator, current_user  # noqa: E402
+from app.auth.neon_auth import AccessSettings, AuthenticatedUser, TokenValidator, current_user, verified_identity  # noqa: E402
+import app.auth.neon_auth as neon_auth  # noqa: E402
 from app.main import app  # noqa: E402
 import app.main as main  # noqa: E402
 from app.models import EntryPayload  # noqa: E402
@@ -66,6 +68,7 @@ def test_every_data_route_requires_sign_in(monkeypatch):
             ("PATCH", "/api/entries/weekly-review/1", {"data": REVIEW, "expected_last_edited_at": None}),
             ("DELETE", "/api/entries/weekly-review/1", {"expected_last_edited_at": None}),
             ("GET", "/api/workbook/download", None),
+            ("POST", "/api/auth/enroll", {"code": "a" * 32}),
         ]
         for method, path, body in requests:
             assert client.request(method, path, json=body).status_code == 401
@@ -109,14 +112,68 @@ def test_admin_identity_can_access_all_records(monkeypatch):
     assert fake.calls == [("entries", "weekly-meeting", 5000, None, None), ("download", None)]
 
 
+def test_signed_in_but_uninvited_account_cannot_read_data(monkeypatch):
+    fake = FakeStore()
+    monkeypatch.setattr(main, "store", fake)
+    monkeypatch.setattr(neon_auth, "is_enrolled", lambda _: False)
+    app.dependency_overrides[verified_identity] = lambda: AuthenticatedUser(
+        "user-id", "pawan.dubey@invecto.com", "Pawan Dubey", "Pawan Dubey"
+    )
+    try:
+        with TestClient(app) as client:
+            assert client.get("/api/entries/weekly-review").status_code == 403
+            assert client.get("/api/workbook/download").status_code == 403
+    finally:
+        app.dependency_overrides.clear()
+    assert fake.calls == []
+
+
+def test_enrollment_requires_matching_invitation(monkeypatch):
+    user = AuthenticatedUser("user-id", "pawan.dubey@invecto.com", "Pawan Dubey", "Pawan Dubey")
+    redeemed = []
+    monkeypatch.setattr(main, "redeem_invite", lambda identity, code: redeemed.append((identity, code)))
+    app.dependency_overrides[verified_identity] = lambda: user
+    try:
+        with TestClient(app) as client:
+            assert client.post("/api/auth/enroll", json={"code": "a" * 32}).status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+    assert redeemed == [(user, "a" * 32)]
+
+
+def test_invitation_redemption_binds_code_to_email_and_auth_user(monkeypatch):
+    user = AuthenticatedUser("neon-user-id", "pawan.dubey@invecto.com", "Pawan Dubey", "Pawan Dubey")
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def execute(self, query, params):
+            self.query, self.params = query, params
+            return self
+
+        def fetchone(self):
+            return ("pawan.dubey@invecto.com",)
+
+    connection = Connection()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(neon_auth.psycopg, "connect", lambda _: connection)
+    neon_auth.redeem_invite(user, "a" * 32)
+    assert connection.params == (
+        "neon-user-id", "pawan.dubey@invecto.com", hashlib.sha256(("a" * 32).encode()).hexdigest()
+    )
+    assert "redeemed_user_id is null" in connection.query
+    assert "expires_at > now()" in connection.query
+
+
 @pytest.fixture(scope="module")
 def token_fixture():
-    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    settings = AuthSettings(
-        tenant_id="00000000-0000-0000-0000-000000000001",
-        api_audience="00000000-0000-0000-0000-000000000002",
-        api_scope="Tracker.Access",
-        spa_client_id="00000000-0000-0000-0000-000000000003",
+    private_key = Ed25519PrivateKey.generate()
+    settings = AccessSettings(
+        auth_url="https://auth.example.test/neondb/auth",
         admin_emails=frozenset({"kushal.shah@invecto.com", "javed.khan@invecto.com"}),
         presales_by_email={"pawan.dubey@invecto.com": "Pawan Dubey"},
     )
@@ -125,54 +182,48 @@ def token_fixture():
         get_signing_key_from_jwt=lambda _: SimpleNamespace(key=private_key.public_key())
     )
     now = int(time.time())
-    claims = {"iss": validator.issuer, "aud": settings.api_audience,
-              "tid": settings.tenant_id, "oid": "user-object-id", "ver": "2.0",
-              "azp": settings.spa_client_id, "scp": "Tracker.Access",
-              "preferred_username": "Pawan.Dubey@invecto.com", "name": "Pawan Dubey",
+    claims = {"iss": settings.issuer, "aud": settings.issuer, "sub": "user-object-id",
+              "email": "Pawan.Dubey@invecto.com", "name": "Pawan Dubey",
               "iat": now, "exp": now + 3600}
 
     def sign(changes=None):
-        return jwt.encode({**claims, **(changes or {})}, private_key, algorithm="RS256")
+        return jwt.encode({**claims, **(changes or {})}, private_key, algorithm="EdDSA")
 
     return validator, sign
 
 
-def test_valid_work_account_maps_to_one_presales_identity(token_fixture):
+def test_valid_tracker_account_maps_to_one_presales_identity(token_fixture):
     validator, sign = token_fixture
     user = validator.validate(sign())
     assert user.presales == "Pawan Dubey"
     assert user.email == "pawan.dubey@invecto.com"
-    assert validator.validate(sign({"preferred_username": "javed.khan@invecto.com"})).is_admin
+    assert validator.validate(sign({"email": "javed.khan@invecto.com"})).is_admin
 
 
 def test_access_configuration_requires_exactly_eight_distinct_presales(monkeypatch):
     values = {
-        "ENTRA_TENANT_ID": "tenant",
-        "ENTRA_API_AUDIENCE": "audience",
-        "ENTRA_API_SCOPE": "api://audience/Tracker.Access",
-        "ENTRA_SPA_CLIENT_ID": "spa",
+        "NEON_AUTH_BASE_URL": "https://auth.example.test/neondb/auth",
         "TRACKER_ADMIN_EMAILS": "kushal.shah@invecto.com,javed.khan@invecto.com",
         "TRACKER_PRESALES_EMAIL_MAP": json.dumps({f"person{i}@invecto.com": name
                                                  for i, name in enumerate(PRESALES_NAMES)}),
     }
     for key, value in values.items():
         monkeypatch.setenv(key, value)
-    settings = AuthSettings.from_env()
+    settings = AccessSettings.from_env()
     assert len(settings.presales_by_email) == 8
-    assert settings.api_scope == "Tracker.Access"
+    assert settings.issuer == "https://auth.example.test"
     assert len(settings.admin_emails) == 2
 
     monkeypatch.setenv("TRACKER_PRESALES_EMAIL_MAP", json.dumps({"one@invecto.com": PRESALES_NAMES[0]}))
-    with pytest.raises(RuntimeError, match="each of the eight"):
-        AuthSettings.from_env()
+    with pytest.raises(RuntimeError, match="each team member"):
+        AccessSettings.from_env()
 
 
 @pytest.mark.parametrize(
     ("changes", "status"),
-    [({"preferred_username": "outsider@invecto.com"}, 403),
-     ({"scp": "Other.Scope"}, 403),
-     ({"azp": "another-client"}, 403),
-     ({"tid": "another-tenant"}, 403),
+    [({"email": "outsider@invecto.com"}, 403),
+     ({"banned": True}, 403),
+     ({"iss": "https://another-auth.example.test"}, 401),
      ({"aud": "another-api"}, 401),
      ({"exp": 1}, 401)],
 )

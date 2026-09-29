@@ -7,8 +7,8 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import Response
 
 from .config import MODULES
-from .auth.dependencies import AuthenticatedUser, current_user
-from .models import DeleteEntryPayload, EntryPayload, UpdateEntryPayload
+from .auth.neon_auth import AuthenticatedUser, current_user, redeem_invite, verified_identity
+from .models import DeleteEntryPayload, EntryPayload, InvitePayload, UpdateEntryPayload
 from .tracker_store import ConflictError, TrackerStore
 
 app = FastAPI(title="Presales Weekly Tracker API", version="2.1.0")
@@ -35,6 +35,12 @@ def names(user: Annotated[AuthenticatedUser, Depends(current_user)]):
 def me(user: Annotated[AuthenticatedUser, Depends(current_user)]):
     return {"name": user.display_name, "email": user.email, "role": "admin" if user.is_admin else "presales",
             "presales": user.presales}
+
+
+@app.post("/api/auth/enroll")
+def enroll(payload: InvitePayload, user: Annotated[AuthenticatedUser, Depends(verified_identity)]):
+    redeem_invite(user, payload.code)
+    return {"message": "Tracker access activated"}
 
 
 @app.get("/api/entries/{module}")

@@ -1,7 +1,6 @@
 import os
 import json
 import time
-import hashlib
 from io import BytesIO
 from types import SimpleNamespace
 
@@ -14,8 +13,7 @@ from fastapi.testclient import TestClient
 
 os.environ.setdefault("DATABASE_URL", "postgresql://unused")
 
-from app.auth.neon_auth import AccessSettings, AuthenticatedUser, TokenValidator, current_user, verified_identity  # noqa: E402
-import app.auth.neon_auth as neon_auth  # noqa: E402
+from app.auth.neon_auth import AccessSettings, AuthenticatedUser, TokenValidator, current_user  # noqa: E402
 from app.main import app  # noqa: E402
 import app.main as main  # noqa: E402
 from app.models import EntryPayload  # noqa: E402
@@ -68,7 +66,6 @@ def test_every_data_route_requires_sign_in(monkeypatch):
             ("PATCH", "/api/entries/weekly-review/1", {"data": REVIEW, "expected_last_edited_at": None}),
             ("DELETE", "/api/entries/weekly-review/1", {"expected_last_edited_at": None}),
             ("GET", "/api/workbook/download", None),
-            ("POST", "/api/auth/enroll", {"code": "a" * 32}),
         ]
         for method, path, body in requests:
             assert client.request(method, path, json=body).status_code == 401
@@ -112,72 +109,20 @@ def test_admin_identity_can_access_all_records(monkeypatch):
     assert fake.calls == [("entries", "weekly-meeting", 5000, None, None), ("download", None)]
 
 
-def test_signed_in_but_uninvited_account_cannot_read_data(monkeypatch):
-    fake = FakeStore()
-    monkeypatch.setattr(main, "store", fake)
-    monkeypatch.setattr(neon_auth, "is_enrolled", lambda _: False)
-    app.dependency_overrides[verified_identity] = lambda: AuthenticatedUser(
-        "user-id", "pawan.dubey@invecto.com", "Pawan Dubey", "Pawan Dubey"
-    )
-    try:
-        with TestClient(app) as client:
-            assert client.get("/api/entries/weekly-review").status_code == 403
-            assert client.get("/api/workbook/download").status_code == 403
-    finally:
-        app.dependency_overrides.clear()
-    assert fake.calls == []
-
-
-def test_enrollment_requires_matching_invitation(monkeypatch):
-    user = AuthenticatedUser("user-id", "pawan.dubey@invecto.com", "Pawan Dubey", "Pawan Dubey")
-    redeemed = []
-    monkeypatch.setattr(main, "redeem_invite", lambda identity, code: redeemed.append((identity, code)))
-    app.dependency_overrides[verified_identity] = lambda: user
-    try:
-        with TestClient(app) as client:
-            assert client.post("/api/auth/enroll", json={"code": "a" * 32}).status_code == 200
-    finally:
-        app.dependency_overrides.clear()
-    assert redeemed == [(user, "a" * 32)]
-
-
-def test_invitation_redemption_binds_code_to_email_and_auth_user(monkeypatch):
-    user = AuthenticatedUser("neon-user-id", "pawan.dubey@invecto.com", "Pawan Dubey", "Pawan Dubey")
-
-    class Connection:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_):
-            pass
-
-        def execute(self, query, params):
-            self.query, self.params = query, params
-            return self
-
-        def fetchone(self):
-            return ("pawan.dubey@invecto.com",)
-
-    connection = Connection()
-    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setattr(neon_auth.psycopg, "connect", lambda _: connection)
-    neon_auth.redeem_invite(user, "a" * 32)
-    assert connection.params == (
-        "neon-user-id", "pawan.dubey@invecto.com", hashlib.sha256(("a" * 32).encode()).hexdigest()
-    )
-    assert "redeemed_user_id is null" in connection.query
-    assert "expires_at > now()" in connection.query
-
-
-def test_signup_checks_invitation_before_account_creation(monkeypatch):
-    checked = []
-    monkeypatch.setattr(main, "check_invite", lambda email, code: checked.append((email, code)))
+def test_private_invitation_routes_are_retired():
     with TestClient(app) as client:
-        response = client.post("/api/auth/check-invite", json={
-            "email": "pawan.dubey@invecto.com", "code": "a" * 32,
-        })
-    assert response.status_code == 200
-    assert checked == [("pawan.dubey@invecto.com", "a" * 32)]
+        for path in ("/api/auth/enroll", "/api/auth/check-invite"):
+            assert client.post(path, json={"email": "pawan.dubey@invecto.com", "code": "a" * 32}).status_code == 404
+
+
+def test_self_signup_checks_approved_email(monkeypatch):
+    settings = AccessSettings("https://auth.example.test/neondb/auth",
+                              frozenset({"kushal.shah@invecto.com", "javed.khan@invecto.com"}),
+                              {"pawan.dubey@invecto.com": "Pawan Dubey"})
+    monkeypatch.setattr(main.AccessSettings, "from_env", classmethod(lambda cls: settings))
+    with TestClient(app) as client:
+        assert client.post("/api/auth/check-email", json={"email": "PAWAN.DUBEY@invecto.com"}).json() == {"name": "Pawan Dubey"}
+        assert client.post("/api/auth/check-email", json={"email": "outsider@invecto.com"}).status_code == 403
 
 
 @pytest.fixture(scope="module")
@@ -194,7 +139,7 @@ def token_fixture():
     )
     now = int(time.time())
     claims = {"iss": settings.issuer, "aud": settings.issuer, "sub": "user-object-id",
-              "email": "Pawan.Dubey@invecto.com", "name": "Pawan Dubey",
+              "email": "Pawan.Dubey@invecto.com", "name": "An incorrect typed name", "emailVerified": True,
               "iat": now, "exp": now + 3600}
 
     def sign(changes=None):
@@ -207,6 +152,7 @@ def test_valid_tracker_account_maps_to_one_presales_identity(token_fixture):
     validator, sign = token_fixture
     user = validator.validate(sign())
     assert user.presales == "Pawan Dubey"
+    assert user.display_name == "Pawan Dubey"
     assert user.email == "pawan.dubey@invecto.com"
     assert validator.validate(sign({"email": "javed.khan@invecto.com"})).is_admin
 
@@ -233,6 +179,8 @@ def test_access_configuration_requires_exactly_eight_distinct_presales(monkeypat
 @pytest.mark.parametrize(
     ("changes", "status"),
     [({"email": "outsider@invecto.com"}, 403),
+     ({"emailVerified": False}, 403),
+     ({"emailVerified": None}, 403),
      ({"banned": True}, 403),
      ({"iss": "https://another-auth.example.test"}, 401),
      ({"aud": "another-api"}, 401),
@@ -322,6 +270,26 @@ def test_store_prevents_writes_to_another_presales_owner(monkeypatch):
     with pytest.raises(ValueError, match="not found"):
         store.delete("weekly-review", 1, None, "Pawan Dubey")
     assert connection.writes == []
+
+
+def test_legacy_case_variant_is_owned_by_the_correct_presales_user(monkeypatch):
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def execute(self, query, params):
+            return self
+
+        def fetchone(self):
+            return {"data": {"Presales": "Ankesh singh"}, "last_edited_at": None}
+
+    store = TrackerStore("postgresql://unused")
+    monkeypatch.setattr(store, "connect", lambda: Connection())
+    assert store.update("weekly-review", 1, {**REVIEW, "Presales": "Ankesh Singh"}, None, "Ankesh Singh")["row"] == 1
+    assert store.delete("weekly-review", 1, None, "Ankesh Singh")["row"] == 1
 
 
 def test_delete_marks_a_record_recoverable(monkeypatch):

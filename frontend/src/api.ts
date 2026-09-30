@@ -19,11 +19,10 @@ const request = async(path: string, init?: RequestInit) => {
 export const api = {
   health: () => request('/health'),
   me: (): Promise<{name: string; email: string; role: 'admin' | 'presales'; presales: string | null}> => request('/me'),
-  enroll: (code: string) => request('/auth/enroll', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({code})}),
-  checkInvite: async (email: string, code: string) => {
-    const response = await fetch(`${baseUrl}/api/auth/check-invite`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, code})});
+  checkEmail: async (email: string): Promise<{name: string}> => {
+    const response = await fetch(`${baseUrl}/api/auth/check-email`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email})});
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new ApiError(body.detail || 'Invalid invitation code', response.status);
+    if (!response.ok) throw new ApiError(body.detail || 'This email is not approved for the tracker', response.status);
     return body;
   },
   names: (): Promise<{am: string[]; presales: string[]}> => request('/names'),

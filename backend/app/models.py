@@ -35,11 +35,7 @@ class DeleteEntryPayload(BaseModel):
     expected_last_edited_at: datetime | None
 
 
-class InvitePayload(BaseModel):
-    code: str = Field(min_length=20, max_length=128)
-
-
-class InviteCheckPayload(InvitePayload):
+class EmailPayload(BaseModel):
     email: str = Field(min_length=3, max_length=320)
 
 class StatusPayload(BaseModel):

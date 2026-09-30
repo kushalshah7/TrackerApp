@@ -240,7 +240,7 @@ class TrackerStore:
             ).fetchone()
             if not old:
                 raise ValueError("Entry was not found")
-            if allowed_presales is not None and old["data"].get("Presales") != allowed_presales:
+            if allowed_presales is not None and str(old["data"].get("Presales", "")).strip().casefold() != allowed_presales.casefold():
                 raise ValueError("Entry was not found")
             self._check_version(old["last_edited_at"], expected_last_edited_at)
             self._check_presales(clean, old["data"])
@@ -265,7 +265,7 @@ class TrackerStore:
             ).fetchone()
             if not current:
                 raise ValueError("Entry was not found")
-            if allowed_presales is not None and current["data"].get("Presales") != allowed_presales:
+            if allowed_presales is not None and str(current["data"].get("Presales", "")).strip().casefold() != allowed_presales.casefold():
                 raise ValueError("Entry was not found")
             self._check_version(current["last_edited_at"], expected_last_edited_at)
             connection.execute(

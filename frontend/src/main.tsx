@@ -1,26 +1,12 @@
 import React, {useEffect, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App';
-import {ApiError, api} from './api';
+import {api} from './api';
 import {authClient, authConfigured} from './auth';
 import './styles.css';
 
 type Viewer = Awaited<ReturnType<typeof api.me>>;
-type Mode = 'sign-in' | 'sign-up' | 'forgot' | 'reset';
-
-function invitationFromLink() {
-  const url = new URL(window.location.href);
-  const fragment = new URLSearchParams(url.hash.slice(1));
-  const token = (fragment.get('invite') || url.searchParams.get('invite'))?.trim();
-  if (token) sessionStorage.setItem('tracker-invite', token);
-  if (url.searchParams.has('invite') || fragment.has('invite')) {
-    url.searchParams.delete('invite');
-    fragment.delete('invite');
-    url.hash = fragment.toString();
-    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
-  }
-  return sessionStorage.getItem('tracker-invite') || '';
-}
+type Mode = 'sign-in' | 'sign-up' | 'verify' | 'forgot' | 'reset';
 
 function errorMessage(cause: unknown) {
   return cause && typeof cause === 'object' && 'message' in cause && typeof cause.message === 'string'
@@ -30,8 +16,7 @@ function errorMessage(cause: unknown) {
 function AuthGate() {
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const [loading, setLoading] = useState(true);
-  const [inviteToken, setInviteToken] = useState(invitationFromLink);
-  const [mode, setMode] = useState<Mode>(inviteToken ? 'sign-up' : 'sign-in');
+  const [mode, setMode] = useState<Mode>('sign-in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [resetCode, setResetCode] = useState('');
@@ -40,29 +25,48 @@ function AuthGate() {
 
   useEffect(() => {
     let active = true;
+    sessionStorage.removeItem('tracker-invite');
     if (!authClient) {setError('Tracker sign-in is not configured.'); setLoading(false); return;}
     authClient.getSession().then(async ({data, error: sessionError}) => {
       if (sessionError) throw sessionError;
       if (!data?.session || !data.user || !active) return;
       setEmail(data.user.email);
-      try {const result = await api.me(); if (active) {setViewer(result); sessionStorage.removeItem('tracker-invite'); setInviteToken('');}}
-      catch (cause) {
-        if (cause instanceof ApiError && cause.status === 403 && inviteToken) {
-          await api.enroll(inviteToken);
-          const result = await api.me();
-          if (active) {setViewer(result); sessionStorage.removeItem('tracker-invite'); setInviteToken('');}
-        } else throw cause;
+      if (!data.user.emailVerified) {
+        setMode('verify');
+        setMessage('Verify your work email once to activate your account.');
+        return;
       }
+      const result = await api.me();
+      if (active) setViewer(result);
     }).catch((cause: unknown) => {if (active) setError(errorMessage(cause));})
       .finally(() => {if (active) setLoading(false);});
     return () => {active = false;};
   }, []);
+
+  const sendVerification = async () => {
+    if (!authClient) return;
+    const result = await authClient.emailOtp.sendVerificationOtp({email: email.trim().toLowerCase(), type: 'email-verification'});
+    if (result.error) throw result.error;
+    setMode('verify'); setResetCode('');
+    setMessage('Check your work email for the verification code. This is only needed once.');
+  };
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!authClient) return;
     setLoading(true); setError(''); setMessage('');
     try {
+      if (mode === 'verify') {
+        const result = await authClient.emailOtp.verifyEmail({email: email.trim().toLowerCase(), otp: resetCode.trim()});
+        if (result.error) throw result.error;
+        const session = await authClient.getSession();
+        if (!session.data?.session) {
+          setMode('sign-in'); setMessage('Email verified. Sign in with your password.'); setResetCode('');
+          return;
+        }
+        setViewer(await api.me()); setPassword(''); setResetCode('');
+        return;
+      }
       if (mode === 'forgot') {
         const result = await authClient.forgetPassword.emailOtp({email: email.trim().toLowerCase()});
         if (result.error) throw result.error;
@@ -78,10 +82,9 @@ function AuthGate() {
         return;
       }
       if (mode === 'sign-up') {
-        if (!inviteToken) throw new Error('Open your private signup link to create an account.');
-        await api.checkInvite(email.trim().toLowerCase(), inviteToken);
+        const approved = await api.checkEmail(email.trim().toLowerCase());
         const result = await authClient.signUp.email({email: email.trim().toLowerCase(), password,
-          name: email.split('@')[0] || 'Tracker user'});
+          name: approved.name});
         if (result.error) throw result.error;
         setMode('sign-in');
       }
@@ -91,16 +94,13 @@ function AuthGate() {
           rememberMe: true});
         if (result.error) throw result.error;
       }
-      try {setViewer(await api.me()); setPassword(''); sessionStorage.removeItem('tracker-invite'); setInviteToken('');}
-      catch (cause) {
-        if (cause instanceof ApiError && cause.status === 403 && inviteToken) {
-          await api.enroll(inviteToken);
-          setViewer(await api.me());
-          sessionStorage.removeItem('tracker-invite');
-          setInviteToken('');
-          setPassword('');
-        } else throw cause;
+      const signedIn = await authClient.getSession();
+      if (!signedIn.data?.session || !signedIn.data.user) throw new Error('Sign-in session was not saved. Check that cookies are enabled.');
+      if (!signedIn.data.user.emailVerified) {
+        await sendVerification();
+        return;
       }
+      setViewer(await api.me()); setPassword('');
     } catch (cause) {setError(errorMessage(cause));}
     finally {setLoading(false);}
   };
@@ -112,23 +112,24 @@ function AuthGate() {
   if (viewer) return <App viewer={viewer} onSignOut={logout}/>;
   return <main className="sign-in-page"><section className="form-card sign-in-card">
     <h1>Presales Tracker</h1>
-    <p>{mode === 'forgot' || mode === 'reset' ? 'Reset your tracker password using a code sent to your work email.' :
-      mode === 'sign-up' ? 'Create your account using your private signup link and a new tracker password.' :
+    <p>{mode === 'verify' ? 'Confirm ownership of your work email once to activate your account.' :
+      mode === 'forgot' || mode === 'reset' ? 'Reset your tracker password using a code sent to your work email.' :
+      mode === 'sign-up' ? 'Create your account with your work email and a new tracker password.' :
       'Sign in with your approved work email and tracker password.'}</p>
     {error && <p role="alert">{error}</p>}
     {message && <p role="status">{message}</p>}
     <form onSubmit={submit} className="sign-in-form">
-      <label>Work email<input type="email" value={email} onChange={event => setEmail(event.target.value)} required autoComplete="email"/></label>
-      {mode !== 'forgot' && <label>{mode === 'reset' ? 'New tracker password' : 'Tracker password'}<input type="password" value={password} onChange={event => setPassword(event.target.value)} required minLength={mode === 'sign-up' || mode === 'reset' ? 12 : undefined} autoComplete={mode === 'sign-up' || mode === 'reset' ? 'new-password' : 'current-password'}/></label>}
-      {mode === 'reset' && <label>Email reset code<input value={resetCode} onChange={event => setResetCode(event.target.value)} required autoComplete="off"/></label>}
+      <label>Work email<input type="email" value={email} onChange={event => setEmail(event.target.value)} required readOnly={mode === 'verify'} autoComplete="email"/></label>
+      {mode !== 'forgot' && mode !== 'verify' && <label>{mode === 'reset' ? 'New tracker password' : 'Tracker password'}<input type="password" value={password} onChange={event => setPassword(event.target.value)} required minLength={mode === 'sign-up' || mode === 'reset' ? 12 : undefined} autoComplete={mode === 'sign-up' || mode === 'reset' ? 'new-password' : 'current-password'}/></label>}
+      {(mode === 'reset' || mode === 'verify') && <label>{mode === 'verify' ? 'Email verification code' : 'Email reset code'}<input value={resetCode} onChange={event => setResetCode(event.target.value)} required inputMode="numeric" autoComplete="one-time-code"/></label>}
       {mode === 'sign-up' && <small>Create a new password for this tracker. Do not reuse your Microsoft work password.</small>}
-      <button className="primary" disabled={loading || !authConfigured}>{loading ? 'Please wait…' : mode === 'sign-up' ? 'Create account' : mode === 'forgot' ? 'Send reset code' : mode === 'reset' ? 'Set new password' : 'Sign in'}</button>
+      <button className="primary" disabled={loading || !authConfigured}>{loading ? 'Please wait…' : mode === 'sign-up' ? 'Create account' : mode === 'verify' ? 'Verify email' : mode === 'forgot' ? 'Send reset code' : mode === 'reset' ? 'Set new password' : 'Sign in'}</button>
     </form>
     {mode === 'sign-up' && <button type="button" className="auth-switch" onClick={() => {setMode('sign-in'); setError('');}}>Already have an account? Sign in</button>}
-    {mode === 'sign-in' && inviteToken && <button type="button" className="auth-switch" onClick={() => {setMode('sign-up'); setError('');}}>Create account</button>}
-    {mode === 'sign-in' && !inviteToken && <p className="sign-in-help">Need an account? Ask Kushal for your private signup link.</p>}
+    {mode === 'sign-in' && <button type="button" className="auth-switch" onClick={() => {setMode('sign-up'); setError(''); setMessage('');}}>New user? Sign up</button>}
     {mode === 'sign-in' && <button type="button" className="auth-switch" onClick={() => {setMode('forgot'); setError('');}}>Forgot password?</button>}
     {(mode === 'forgot' || mode === 'reset') && <button type="button" className="auth-switch" onClick={() => {setMode('sign-in'); setError('');}}>Back to sign in</button>}
+    {mode === 'verify' && <><button type="button" className="auth-switch" disabled={loading} onClick={async () => {setLoading(true); setError(''); try {await sendVerification();} catch (cause) {setError(errorMessage(cause));} finally {setLoading(false);}}}>Resend email verification</button><button type="button" className="auth-switch" onClick={logout}>Use another account</button></>}
   </section></main>;
 }
 

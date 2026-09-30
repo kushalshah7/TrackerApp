@@ -33,7 +33,8 @@ The production environment requires `NEON_AUTH_BASE_URL`,
 The Vite URL is embedded in the frontend build, so changing it requires a
 new deployment.
 
-Keep Vercel Authentication on **All Deployments** until an administrator and
-a Presales member have completed live signup and verified their different
-record access. Then use **Standard Protection** to keep historical deployment
-URLs private while allowing the current production alias to use tracker sign-in.
+Production uses Vercel **Standard Protection** to keep historical deployment
+URLs private while the current production alias uses tracker sign-in. Before
+team rollout, complete live signup as an administrator and a Presales member,
+verify their different record access, and reopen the app on the same device to
+check that the session is retained.

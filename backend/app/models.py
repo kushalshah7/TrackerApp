@@ -38,6 +38,10 @@ class DeleteEntryPayload(BaseModel):
 class InvitePayload(BaseModel):
     code: str = Field(min_length=20, max_length=128)
 
+
+class InviteCheckPayload(InvitePayload):
+    email: str = Field(min_length=3, max_length=320)
+
 class StatusPayload(BaseModel):
     status: Literal["Pending", "Completed"]
     up_to: str | None = Field(default=None, max_length=120)

@@ -169,6 +169,17 @@ def test_invitation_redemption_binds_code_to_email_and_auth_user(monkeypatch):
     assert "expires_at > now()" in connection.query
 
 
+def test_signup_checks_invitation_before_account_creation(monkeypatch):
+    checked = []
+    monkeypatch.setattr(main, "check_invite", lambda email, code: checked.append((email, code)))
+    with TestClient(app) as client:
+        response = client.post("/api/auth/check-invite", json={
+            "email": "pawan.dubey@invecto.com", "code": "a" * 32,
+        })
+    assert response.status_code == 200
+    assert checked == [("pawan.dubey@invecto.com", "a" * 32)]
+
+
 @pytest.fixture(scope="module")
 def token_fixture():
     private_key = Ed25519PrivateKey.generate()

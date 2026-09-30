@@ -6,15 +6,35 @@ import {authClient, authConfigured} from './auth';
 import './styles.css';
 
 type Viewer = Awaited<ReturnType<typeof api.me>>;
-type Mode = 'sign-in' | 'sign-up' | 'invite' | 'forgot' | 'reset';
+type Mode = 'sign-in' | 'sign-up' | 'forgot' | 'reset';
+
+function invitationFromLink() {
+  const url = new URL(window.location.href);
+  const fragment = new URLSearchParams(url.hash.slice(1));
+  const token = (fragment.get('invite') || url.searchParams.get('invite'))?.trim();
+  if (token) sessionStorage.setItem('tracker-invite', token);
+  if (url.searchParams.has('invite') || fragment.has('invite')) {
+    url.searchParams.delete('invite');
+    fragment.delete('invite');
+    url.hash = fragment.toString();
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  }
+  return sessionStorage.getItem('tracker-invite') || '';
+}
+
+function errorMessage(cause: unknown) {
+  return cause && typeof cause === 'object' && 'message' in cause && typeof cause.message === 'string'
+    ? cause.message : 'Unable to complete sign-in. Please try again.';
+}
 
 function AuthGate() {
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const [loading, setLoading] = useState(true);
-  const [mode, setMode] = useState<Mode>('sign-in');
+  const [inviteToken, setInviteToken] = useState(invitationFromLink);
+  const [mode, setMode] = useState<Mode>(inviteToken ? 'sign-up' : 'sign-in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [inviteCode, setInviteCode] = useState('');
+  const [resetCode, setResetCode] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
@@ -25,12 +45,15 @@ function AuthGate() {
       if (sessionError) throw sessionError;
       if (!data?.session || !data.user || !active) return;
       setEmail(data.user.email);
-      try {const result = await api.me(); if (active) setViewer(result);}
+      try {const result = await api.me(); if (active) {setViewer(result); sessionStorage.removeItem('tracker-invite'); setInviteToken('');}}
       catch (cause) {
-        if (active && cause instanceof ApiError && cause.status === 403) setMode('invite');
-        else throw cause;
+        if (cause instanceof ApiError && cause.status === 403 && inviteToken) {
+          await api.enroll(inviteToken);
+          const result = await api.me();
+          if (active) {setViewer(result); sessionStorage.removeItem('tracker-invite'); setInviteToken('');}
+        } else throw cause;
       }
-    }).catch((cause: Error) => {if (active) setError(cause.message);})
+    }).catch((cause: unknown) => {if (active) setError(errorMessage(cause));})
       .finally(() => {if (active) setLoading(false);});
     return () => {active = false;};
   }, []);
@@ -48,61 +71,64 @@ function AuthGate() {
       }
       if (mode === 'reset') {
         const result = await authClient.emailOtp.resetPassword({email: email.trim().toLowerCase(),
-          otp: inviteCode.trim(), password});
+          otp: resetCode.trim(), password});
         if (result.error) throw result.error;
-        setMode('sign-in'); setPassword(''); setInviteCode('');
+        setMode('sign-in'); setPassword(''); setResetCode('');
         setMessage('Password updated. Sign in with your new password.');
         return;
       }
       if (mode === 'sign-up') {
+        if (!inviteToken) throw new Error('Open your private signup link to create an account.');
+        await api.checkInvite(email.trim().toLowerCase(), inviteToken);
         const result = await authClient.signUp.email({email: email.trim().toLowerCase(), password,
           name: email.split('@')[0] || 'Tracker user'});
         if (result.error) throw result.error;
+        setMode('sign-in');
       }
       const session = await authClient.getSession();
-      if (mode === 'invite' && !session.data?.session) {
-        setMode('sign-in');
-        throw new Error('Your session expired. Sign in again before activating access.');
-      }
       if (mode === 'sign-in' || !session.data?.session) {
         const result = await authClient.signIn.email({email: email.trim().toLowerCase(), password,
           rememberMe: true});
         if (result.error) throw result.error;
       }
-      if (mode === 'sign-up' || mode === 'invite') await api.enroll(inviteCode.trim());
-      try {setViewer(await api.me()); setPassword(''); setInviteCode('');}
+      try {setViewer(await api.me()); setPassword(''); sessionStorage.removeItem('tracker-invite'); setInviteToken('');}
       catch (cause) {
-        if (cause instanceof ApiError && cause.status === 403) setMode('invite');
-        else throw cause;
+        if (cause instanceof ApiError && cause.status === 403 && inviteToken) {
+          await api.enroll(inviteToken);
+          setViewer(await api.me());
+          sessionStorage.removeItem('tracker-invite');
+          setInviteToken('');
+          setPassword('');
+        } else throw cause;
       }
-    } catch (cause) {setError(cause instanceof Error ? cause.message : 'Sign-in failed');}
+    } catch (cause) {setError(errorMessage(cause));}
     finally {setLoading(false);}
   };
   const logout = async () => {
     try {await authClient?.signOut(); setViewer(null); setPassword(''); setMode('sign-in');}
-    catch (cause) {setError(cause instanceof Error ? cause.message : 'Sign-out failed');}
+    catch (cause) {setError(errorMessage(cause));}
   };
 
   if (viewer) return <App viewer={viewer} onSignOut={logout}/>;
   return <main className="sign-in-page"><section className="form-card sign-in-card">
     <h1>Presales Tracker</h1>
-    <p>{mode === 'invite' ? `Enter the one-time invitation code for ${email}.` :
-      mode === 'forgot' || mode === 'reset' ? 'Reset your tracker password using a code sent to your work email.' :
-      'Use your approved work email and a separate password for this tracker.'}</p>
+    <p>{mode === 'forgot' || mode === 'reset' ? 'Reset your tracker password using a code sent to your work email.' :
+      mode === 'sign-up' ? 'Create your account using your private signup link and a new tracker password.' :
+      'Sign in with your approved work email and tracker password.'}</p>
     {error && <p role="alert">{error}</p>}
     {message && <p role="status">{message}</p>}
     <form onSubmit={submit} className="sign-in-form">
-      {mode !== 'invite' && <label>Work email<input type="email" value={email} onChange={event => setEmail(event.target.value)} required autoComplete="email"/></label>}
-      {mode !== 'forgot' && mode !== 'invite' && <label>{mode === 'reset' ? 'New tracker password' : 'Tracker password'}<input type="password" value={password} onChange={event => setPassword(event.target.value)} required minLength={mode === 'sign-up' || mode === 'reset' ? 12 : undefined} autoComplete={mode === 'sign-up' || mode === 'reset' ? 'new-password' : 'current-password'}/></label>}
-      {(mode === 'sign-up' || mode === 'invite' || mode === 'reset') && <label>{mode === 'reset' ? 'Email reset code' : 'One-time invitation code'}<input value={inviteCode} onChange={event => setInviteCode(event.target.value)} required autoComplete="off"/></label>}
+      <label>Work email<input type="email" value={email} onChange={event => setEmail(event.target.value)} required autoComplete="email"/></label>
+      {mode !== 'forgot' && <label>{mode === 'reset' ? 'New tracker password' : 'Tracker password'}<input type="password" value={password} onChange={event => setPassword(event.target.value)} required minLength={mode === 'sign-up' || mode === 'reset' ? 12 : undefined} autoComplete={mode === 'sign-up' || mode === 'reset' ? 'new-password' : 'current-password'}/></label>}
+      {mode === 'reset' && <label>Email reset code<input value={resetCode} onChange={event => setResetCode(event.target.value)} required autoComplete="off"/></label>}
       {mode === 'sign-up' && <small>Create a new password for this tracker. Do not reuse your Microsoft work password.</small>}
-      <button className="primary" disabled={loading || !authConfigured}>{loading ? 'Please wait…' : mode === 'sign-up' ? 'Create account' : mode === 'invite' ? 'Activate access' : mode === 'forgot' ? 'Send reset code' : mode === 'reset' ? 'Set new password' : 'Sign in'}</button>
+      <button className="primary" disabled={loading || !authConfigured}>{loading ? 'Please wait…' : mode === 'sign-up' ? 'Create account' : mode === 'forgot' ? 'Send reset code' : mode === 'reset' ? 'Set new password' : 'Sign in'}</button>
     </form>
-    {mode !== 'invite' && <button type="button" className="auth-switch" onClick={() => {setMode(mode === 'sign-in' ? 'sign-up' : 'sign-in'); setError(''); setMessage('');}}>
-      {mode === 'sign-in' ? 'New team member? Sign up' : 'Back to sign in'}
-    </button>}
+    {mode === 'sign-up' && <button type="button" className="auth-switch" onClick={() => {setMode('sign-in'); setError('');}}>Already have an account? Sign in</button>}
+    {mode === 'sign-in' && inviteToken && <button type="button" className="auth-switch" onClick={() => {setMode('sign-up'); setError('');}}>Create account</button>}
+    {mode === 'sign-in' && !inviteToken && <p className="sign-in-help">Need an account? Ask Kushal for your private signup link.</p>}
     {mode === 'sign-in' && <button type="button" className="auth-switch" onClick={() => {setMode('forgot'); setError('');}}>Forgot password?</button>}
-    {mode === 'invite' && <button type="button" className="auth-switch" onClick={logout}>Use another account</button>}
+    {(mode === 'forgot' || mode === 'reset') && <button type="button" className="auth-switch" onClick={() => {setMode('sign-in'); setError('');}}>Back to sign in</button>}
   </section></main>;
 }
 

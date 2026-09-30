@@ -20,6 +20,12 @@ export const api = {
   health: () => request('/health'),
   me: (): Promise<{name: string; email: string; role: 'admin' | 'presales'; presales: string | null}> => request('/me'),
   enroll: (code: string) => request('/auth/enroll', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({code})}),
+  checkInvite: async (email: string, code: string) => {
+    const response = await fetch(`${baseUrl}/api/auth/check-invite`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email, code})});
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new ApiError(body.detail || 'Invalid invitation code', response.status);
+    return body;
+  },
   names: (): Promise<{am: string[]; presales: string[]}> => request('/names'),
   entries: (module: string, limit = 5000, beforeId?: number): Promise<any[]> => request(`/entries/${module}?limit=${limit}${beforeId ? `&before_id=${beforeId}` : ''}`),
   allEntries: async (module: string): Promise<any[]> => {

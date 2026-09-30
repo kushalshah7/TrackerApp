@@ -142,3 +142,20 @@ def redeem_invite(user: AuthenticatedUser, code: str) -> None:
         ).fetchone()
     if not row and not is_enrolled(user):
         raise HTTPException(403, "Invitation code is invalid, expired, or already used")
+
+
+def check_invite(email: str, code: str) -> None:
+    if not 20 <= len(code) <= 128:
+        raise HTTPException(403, "Invitation code is invalid, expired, or already used")
+    digest = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    database_url = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")
+    if not database_url:
+        raise HTTPException(503, "Database is not configured")
+    with psycopg.connect(database_url) as connection:
+        row = connection.execute(
+            "select 1 from tracker_invites where email = %s and code_hash = %s "
+            "and redeemed_user_id is null and expires_at > now()",
+            (email.strip().casefold(), digest),
+        ).fetchone()
+    if not row:
+        raise HTTPException(403, "Invitation code is invalid, expired, or already used")

@@ -31,6 +31,12 @@ The production environment requires `NEON_AUTH_BASE_URL`,
 The Vite URL is embedded in the frontend build, so changing it requires a
 new deployment.
 
+Neon Auth's trusted-origin list must include
+`https://tracker-app-two-swart.vercel.app`. A missing entry causes
+`INVALID_ORIGIN` on signup and sign-in. The guarded
+`backend/scripts/configure_auth_origin.py` script adds this exact production
+origin while preserving the existing list. Unrelated origins stay blocked.
+
 Production uses Vercel **Standard Protection** to keep historical deployment
 URLs private while the current production alias uses tracker sign-in. Before
 team rollout, complete live signup as an administrator and a Presales member,

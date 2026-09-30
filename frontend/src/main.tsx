@@ -110,14 +110,17 @@ function AuthGate() {
   };
 
   if (viewer) return <App viewer={viewer} onSignOut={logout}/>;
-  return <main className="sign-in-page"><section className="form-card sign-in-card">
-    <h1>Presales Tracker</h1>
-    <p>{mode === 'verify' ? 'Confirm ownership of your work email once to activate your account.' :
+  return <main className="sign-in-page"><section className="form-card sign-in-card" aria-labelledby="auth-title">
+    <header className="auth-header">
+      <div className="auth-brand"><span className="auth-brand-mark" aria-hidden="true">P</span><span>Presales Tracker</span></div>
+      <h1 id="auth-title">{mode === 'sign-up' ? 'Create your account' : mode === 'verify' ? 'Verify your email' : mode === 'forgot' ? 'Reset your password' : mode === 'reset' ? 'Choose a new password' : 'Sign in'}</h1>
+      <p>{mode === 'verify' ? 'Confirm ownership of your work email once to activate your account.' :
       mode === 'forgot' || mode === 'reset' ? 'Reset your tracker password using a code sent to your work email.' :
       mode === 'sign-up' ? 'Create your account with your work email and a new tracker password.' :
-      'Sign in with your approved work email and tracker password.'}</p>
-    {error && <p role="alert">{error}</p>}
-    {message && <p role="status">{message}</p>}
+      'Use your work email and tracker password to continue.'}</p>
+    </header>
+    {error && <div className="auth-feedback auth-feedback-error" role="alert">{error}</div>}
+    {message && <div className="auth-feedback" role="status">{message}</div>}
     <form onSubmit={submit} className="sign-in-form">
       <label>Work email<input type="email" value={email} onChange={event => setEmail(event.target.value)} required readOnly={mode === 'verify'} autoComplete="email"/></label>
       {mode !== 'forgot' && mode !== 'verify' && <label>{mode === 'reset' ? 'New tracker password' : 'Tracker password'}<input type="password" value={password} onChange={event => setPassword(event.target.value)} required minLength={mode === 'sign-up' || mode === 'reset' ? 12 : undefined} autoComplete={mode === 'sign-up' || mode === 'reset' ? 'new-password' : 'current-password'}/></label>}
@@ -125,11 +128,13 @@ function AuthGate() {
       {mode === 'sign-up' && <small>Create a new password for this tracker. Do not reuse your Microsoft work password.</small>}
       <button className="primary" disabled={loading || !authConfigured}>{loading ? 'Please wait…' : mode === 'sign-up' ? 'Create account' : mode === 'verify' ? 'Verify email' : mode === 'forgot' ? 'Send reset code' : mode === 'reset' ? 'Set new password' : 'Sign in'}</button>
     </form>
-    {mode === 'sign-up' && <button type="button" className="auth-switch" onClick={() => {setMode('sign-in'); setError('');}}>Already have an account? Sign in</button>}
-    {mode === 'sign-in' && <button type="button" className="auth-switch" onClick={() => {setMode('sign-up'); setError(''); setMessage('');}}>New user? Sign up</button>}
+    <nav className={`auth-actions ${mode === 'sign-up' || mode === 'forgot' || mode === 'reset' ? 'auth-actions-single' : ''}`} aria-label="Account options">
+    {mode === 'sign-up' && <button type="button" className="auth-switch" onClick={() => {setMode('sign-in'); setError(''); setMessage('');}}>Already registered? Sign in</button>}
+    {mode === 'sign-in' && <button type="button" className="auth-switch" onClick={() => {setMode('sign-up'); setError(''); setMessage('');}}>Create account</button>}
     {mode === 'sign-in' && <button type="button" className="auth-switch" onClick={() => {setMode('forgot'); setError('');}}>Forgot password?</button>}
     {(mode === 'forgot' || mode === 'reset') && <button type="button" className="auth-switch" onClick={() => {setMode('sign-in'); setError('');}}>Back to sign in</button>}
     {mode === 'verify' && <><button type="button" className="auth-switch" disabled={loading} onClick={async () => {setLoading(true); setError(''); try {await sendVerification();} catch (cause) {setError(errorMessage(cause));} finally {setLoading(false);}}}>Resend email verification</button><button type="button" className="auth-switch" onClick={logout}>Use another account</button></>}
+    </nav>
   </section></main>;
 }
 

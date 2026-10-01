@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 from .neon_auth import AccessSettings
 
@@ -30,6 +30,14 @@ def first_party_cookie(value: str) -> str | None:
 
 @router.api_route("/api/auth/neon/{path:path}", methods=["GET", "POST"])
 async def auth_proxy(path: str, request: Request):
+    try:
+        return await forward_auth(path, request)
+    except HTTPException as exc:
+        return JSONResponse({"code": "TRACKER_AUTH_ERROR", "message": exc.detail},
+                            status_code=exc.status_code, headers={"Cache-Control": "no-store"})
+
+
+async def forward_auth(path: str, request: Request):
     if ENDPOINTS.get(path) != request.method:
         raise HTTPException(404, "Unknown sign-in endpoint")
     origin = os.getenv("FRONTEND_ORIGIN", "https://tracker-app-two-swart.vercel.app").rstrip("/")

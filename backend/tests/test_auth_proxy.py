@@ -129,4 +129,5 @@ def test_unapproved_email_cannot_sign_up(setup, monkeypatch):
     response = client.post("/api/auth/neon/sign-up/email", headers={"Origin": ORIGIN},
                            json={"email": "outsider@example.com", "password": "test-only"})
     assert response.status_code == 403
+    assert response.json()["message"] == "Email is not approved"
     assert not calls

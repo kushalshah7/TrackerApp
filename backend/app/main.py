@@ -8,10 +8,12 @@ from fastapi.responses import Response
 
 from .config import MODULES
 from .auth.neon_auth import AccessSettings, AuthenticatedUser, current_user
+from .auth.proxy import router as auth_router
 from .models import DeleteEntryPayload, EmailPayload, EntryPayload, UpdateEntryPayload
 from .tracker_store import ConflictError, TrackerStore
 
 app = FastAPI(title="Presales Weekly Tracker API", version="2.1.0")
+app.include_router(auth_router)
 store = TrackerStore()
 VISIBLE_MODULES = {"weekly-review", "weekly-meeting"}
 

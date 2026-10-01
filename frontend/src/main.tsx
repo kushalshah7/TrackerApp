@@ -2,7 +2,7 @@ import React, {useEffect, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App';
 import {api} from './api';
-import {authClient, authConfigured} from './auth';
+import {authClient, authConfigured, clearAuthToken} from './auth';
 import './styles.css';
 
 type Viewer = Awaited<ReturnType<typeof api.me>>;
@@ -55,6 +55,7 @@ function AuthGate() {
     event.preventDefault();
     if (!authClient) return;
     setLoading(true); setError(''); setMessage('');
+    clearAuthToken();
     try {
       if (mode === 'verify') {
         const result = await authClient.emailOtp.verifyEmail({email: email.trim().toLowerCase(), otp: resetCode.trim()});
@@ -85,11 +86,17 @@ function AuthGate() {
         const approved = await api.checkEmail(email.trim().toLowerCase());
         const result = await authClient.signUp.email({email: email.trim().toLowerCase(), password,
           name: approved.name});
-        if (result.error) throw result.error;
+        if (result.error) {
+          if (result.error.code?.startsWith('USER_ALREADY_EXISTS')) {
+            setMode('sign-in');
+            setMessage('Your account already exists. Sign in with your tracker password, or use Forgot password.');
+            return;
+          }
+          throw result.error;
+        }
         setMode('sign-in');
       }
-      const session = await authClient.getSession();
-      if (mode === 'sign-in' || !session.data?.session) {
+      if (mode === 'sign-in' || mode === 'sign-up') {
         const result = await authClient.signIn.email({email: email.trim().toLowerCase(), password,
           rememberMe: true});
         if (result.error) throw result.error;
@@ -105,6 +112,7 @@ function AuthGate() {
     finally {setLoading(false);}
   };
   const logout = async () => {
+    clearAuthToken();
     try {await authClient?.signOut(); setViewer(null); setPassword(''); setMode('sign-in');}
     catch (cause) {setError(errorMessage(cause));}
   };

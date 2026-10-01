@@ -8,7 +8,8 @@ the API. Roles and Presales names come from the approved email mapping.
 
 ## First use
 
-1. Open the tracker and select **New user? Sign up**.
+1. Open the tracker and select **Create account**. If already registered, use
+   **Sign in** or **Forgot password?**, not Create account again.
 2. Enter your approved work email and a new tracker password of at least
    12 characters. Confirm ownership using the verification sent to that email.
 3. On the same device, the browser keeps your session while it remains valid.
@@ -26,10 +27,14 @@ No private links or invitation codes are required. Legacy invitation endpoints
 have been removed, and old invitation records are not used for access.
 
 The production environment requires `NEON_AUTH_BASE_URL`,
-`VITE_NEON_AUTH_URL`, `TRACKER_ADMIN_EMAILS`, and
+`TRACKER_ADMIN_EMAILS`, and
 `TRACKER_PRESALES_EMAIL_MAP`. These are configured on the Vercel project.
-The Vite URL is embedded in the frontend build, so changing it requires a
-new deployment.
+The browser uses `/api/auth/neon` on the tracker's own domain. The backend
+proxies only the required authentication endpoints and forwards only Neon
+cookies. Session cookies are Secure, HttpOnly, same-site, and never stored in
+localStorage. Passwords are passed to managed Neon Auth, not saved by the tracker.
+API tokens are cached only in memory until shortly before expiry, reducing
+repeat requests. `VITE_NEON_AUTH_URL` is no longer needed.
 
 Neon Auth's trusted-origin list must include
 `https://tracker-app-two-swart.vercel.app`. A missing entry causes

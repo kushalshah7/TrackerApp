@@ -11,7 +11,7 @@ the API. Roles and Presales names come from the approved email mapping.
 1. Open the tracker and select **Create account**. If already registered, use
    **Sign in** or **Forgot password?**, not Create account again.
 2. Enter your approved work email and a new tracker password of at least
-   12 characters. Confirm ownership using the verification sent to that email.
+   8 characters. Confirm ownership using the verification sent to that email.
 3. On the same device, the browser keeps your session while it remains valid.
    Signing out, clearing site data, or an expired session requires signing in
    again. Use **Forgot password?** to reset it by email if needed.

@@ -118,9 +118,14 @@ function AuthGate() {
   };
 
   if (viewer) return <App viewer={viewer} onSignOut={logout}/>;
-  return <main className="sign-in-page"><section className="form-card sign-in-card" aria-labelledby="auth-title">
+  return <div className="auth-page">
+    <header className="auth-masthead">
+      <div className="auth-company"><span>INVECTO</span><span className="auth-company-divider" aria-hidden="true"/><span className="auth-product">Presales Tracker</span></div>
+      <span className="auth-internal">Internal team portal</span>
+    </header>
+    <main className="sign-in-page"><section className="form-card sign-in-card" aria-labelledby="auth-title">
     <header className="auth-header">
-      <div className="auth-brand"><span className="auth-brand-mark" aria-hidden="true">P</span><span>Presales Tracker</span></div>
+      <p className="auth-eyebrow">TEAM WORKSPACE</p>
       <h1 id="auth-title">{mode === 'sign-up' ? 'Create your account' : mode === 'verify' ? 'Verify your email' : mode === 'forgot' ? 'Reset your password' : mode === 'reset' ? 'Choose a new password' : 'Sign in'}</h1>
       <p>{mode === 'verify' ? 'Confirm ownership of your work email once to activate your account.' :
       mode === 'forgot' || mode === 'reset' ? 'Reset your tracker password using a code sent to your work email.' :
@@ -131,9 +136,9 @@ function AuthGate() {
     {message && <div className="auth-feedback" role="status">{message}</div>}
     <form onSubmit={submit} className="sign-in-form">
       <label>Work email<input type="email" value={email} onChange={event => setEmail(event.target.value)} required readOnly={mode === 'verify'} autoComplete="email"/></label>
-      {mode !== 'forgot' && mode !== 'verify' && <label>{mode === 'reset' ? 'New tracker password' : 'Tracker password'}<input type="password" value={password} onChange={event => setPassword(event.target.value)} required minLength={mode === 'sign-up' || mode === 'reset' ? 12 : undefined} autoComplete={mode === 'sign-up' || mode === 'reset' ? 'new-password' : 'current-password'}/></label>}
+      {mode !== 'forgot' && mode !== 'verify' && <label>{mode === 'reset' ? 'New tracker password' : 'Tracker password'}<input type="password" value={password} onChange={event => setPassword(event.target.value)} required minLength={mode === 'sign-up' || mode === 'reset' ? 8 : undefined} aria-describedby={mode === 'sign-up' || mode === 'reset' ? 'auth-password-help' : undefined} autoComplete={mode === 'sign-up' || mode === 'reset' ? 'new-password' : 'current-password'}/></label>}
       {(mode === 'reset' || mode === 'verify') && <label>{mode === 'verify' ? 'Email verification code' : 'Email reset code'}<input value={resetCode} onChange={event => setResetCode(event.target.value)} required inputMode="numeric" autoComplete="one-time-code"/></label>}
-      {mode === 'sign-up' && <small>Create a new password for this tracker. Do not reuse your Microsoft work password.</small>}
+      {(mode === 'sign-up' || mode === 'reset') && <small id="auth-password-help">Use at least 8 characters. Choose a tracker-only password, separate from your Microsoft work password.</small>}
       <button className="primary" disabled={loading || !authConfigured}>{loading ? 'Please wait…' : mode === 'sign-up' ? 'Create account' : mode === 'verify' ? 'Verify email' : mode === 'forgot' ? 'Send reset code' : mode === 'reset' ? 'Set new password' : 'Sign in'}</button>
     </form>
     <nav className={`auth-actions ${mode === 'sign-up' || mode === 'forgot' || mode === 'reset' ? 'auth-actions-single' : ''}`} aria-label="Account options">
@@ -143,7 +148,10 @@ function AuthGate() {
     {(mode === 'forgot' || mode === 'reset') && <button type="button" className="auth-switch" onClick={() => {setMode('sign-in'); setError('');}}>Back to sign in</button>}
     {mode === 'verify' && <><button type="button" className="auth-switch" disabled={loading} onClick={async () => {setLoading(true); setError(''); try {await sendVerification();} catch (cause) {setError(errorMessage(cause));} finally {setLoading(false);}}}>Resend email verification</button><button type="button" className="auth-switch" onClick={logout}>Use another account</button></>}
     </nav>
-  </section></main>;
+    <p className="auth-access-note">Access is restricted to approved Invecto employees.</p>
+  </section></main>
+    <footer className="auth-page-footer">Invecto · Presales operations</footer>
+  </div>;
 }
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><AuthGate/></React.StrictMode>);
